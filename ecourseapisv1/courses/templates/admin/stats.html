@@ -1,0 +1,49 @@
+{% extends 'admin/base_site.html' %}
+
+{% block content %}
+<h1>THỐNG KÊ THÔNG TIN CÁC KHOÁ HỌC</h1>
+
+<ul>
+    {% for c in stats %}
+    <li><strong>{{c.name}}</strong>: {{c.c}}</li>
+    {% endfor %}
+</ul>
+
+<div style="width: 50%">
+  <canvas id="myChart"></canvas>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    let labels = [];
+    let data = [];
+
+    {% for c in stats %}
+        labels.push('{{c.name}}')
+        data.push({{ c.c }})
+    {% endfor %}
+
+    window.onload = function() {
+          const ctx = document.getElementById('myChart');
+
+          new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: labels,
+              datasets: [{
+                label: '# So luong',
+                data: data,
+                borderWidth: 1
+              }]
+            },
+            options: {
+              scales: {
+                y: {
+                  beginAtZero: true
+                }
+              }
+            }
+          });
+    }
+</script>
+{% endblock %}
