@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.pagination import StandardPagination
 from apps.core.schema import PARAM_PAGE, PARAM_PAGE_SIZE, TAG_NOTIFICATIONS
 from apps.notifications.models import Notification
 from apps.analytics.serializers import NotificationReadAllSerializer
@@ -27,12 +28,13 @@ class NotificationListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = Notification.objects.filter(user=request.user, is_active=True)
+        qs = Notification.objects.filter(user=request.user, is_active=True).order_by('-created_at')
         is_read = request.query_params.get('is_read')
         if is_read is not None:
             qs = qs.filter(is_read=is_read.lower() == 'true')
-        data = NotificationSerializer(qs[:50], many=True).data
-        return Response({'data': data, 'meta': {'total_count': qs.count()}})
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(qs, request)
+        return paginator.get_paginated_response(NotificationSerializer(page, many=True).data)
 
 
 @extend_schema_view(

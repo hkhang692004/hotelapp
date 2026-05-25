@@ -21,6 +21,9 @@ from apps.bookings.serializers import (
 from apps.bookings.services.booking_service import BookingService
 from apps.core.pagination import StandardPagination
 from apps.core.schema import PARAM_PAGE, PARAM_PAGE_SIZE, PARAM_SEARCH, TAG_BOOKINGS
+from apps.payments.models import PaymentMethod
+from apps.payments.serializers import PaymentSerializer
+from apps.payments.services.payment_service import PaymentService
 
 BOOKING_LIST_PARAMS = [
     PARAM_PAGE,
@@ -52,6 +55,7 @@ BOOKING_LIST_PARAMS = [
                     'check_out_date': '2026-06-05',
                     'adults': 2,
                     'children': 0,
+                    'payment_method': 'vnpay',
                     'rooms': [{'room_type_id': '00000000-0000-0000-0000-000000000001', 'quantity': 1}],
                     'special_request': 'Giường đôi',
                 },
@@ -67,10 +71,14 @@ class BookingListCreateView(APIView):
         qs = BookingService.get_queryset_for_user(request.user)
         status_param = request.query_params.get('status')
         if status_param:
-            qs = qs.filter(status=status_param)
+            statuses = [s.strip() for s in status_param.split(',') if s.strip()]
+            qs = qs.filter(status__in=statuses)
         check_in = request.query_params.get('check_in_date')
         if check_in:
             qs = qs.filter(check_in_date=check_in)
+        check_in_gte = request.query_params.get('check_in_date_gte')
+        if check_in_gte:
+            qs = qs.filter(check_in_date__gte=check_in_gte)
         customer_id = request.query_params.get('customer_id')
         if customer_id and request.user.role in (UserRole.MANAGER, UserRole.RECEPTIONIST):
             qs = qs.filter(customer_id=customer_id)
@@ -96,7 +104,32 @@ class BookingListCreateView(APIView):
             rooms_data=data['rooms'],
             special_request=data.get('special_request', ''),
         )
-        return Response(BookingDetailSerializer(booking).data, status=status.HTTP_201_CREATED)
+
+        payment_method = data.get('payment_method', 'vnpay')
+        payment = None
+        message = ''
+
+        if payment_method == 'vnpay':
+            payment = PaymentService.create_payment(
+                booking.id,
+                booking.total_amount,
+                PaymentMethod.VNPAY,
+                request.user,
+                request=request,
+                app_return_url=data.get('app_return_url', ''),
+            )
+            message = 'Đơn đặt phòng đã được tạo. Vui lòng thanh toán VNPay để xác nhận.'
+        else:
+            booking = BookingService.transition(booking, BookingStatus.CONFIRMED, request.user, 'Customer pay at counter')
+            message = 'Đơn đặt phòng đã được xác nhận. Thanh toán tại quầy khi đến khách sạn.'
+
+        return Response({
+            'booking': BookingDetailSerializer(booking).data,
+            'payment_method': payment_method,
+            'payment': PaymentSerializer(payment).data if payment else None,
+            'payment_url': payment.payment_url if payment else '',
+            'message': message,
+        }, status=status.HTTP_201_CREATED)
 
 
 @extend_schema_view(

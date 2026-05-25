@@ -41,8 +41,7 @@ class ServiceOrderService:
             total += subtotal
         order.total_amount = total
         order.save(update_fields=['total_amount', 'updated_at'])
-        booking.total_amount += total
-        booking.save(update_fields=['total_amount', 'updated_at'])
+        # Chưa cộng vào booking — chỉ cộng khi lễ tân confirm
         return order
 
     @staticmethod
@@ -55,6 +54,15 @@ class ServiceOrderService:
             raise BusinessException('Trạng thái không hợp lệ', code='INVALID_STATUS')
         order.status = ServiceOrderStatus.CONFIRMED
         order.save(update_fields=['status', 'updated_at'])
+        # Cộng tiền vào booking khi confirm
+        booking = order.booking
+        booking.total_amount += order.total_amount
+        booking.save(update_fields=['total_amount', 'updated_at'])
+        try:
+            from apps.notifications.services.notification_service import NotificationService
+            NotificationService.service_order_confirmed(order)
+        except Exception:
+            pass
         return order
 
     @staticmethod
@@ -67,8 +75,14 @@ class ServiceOrderService:
             raise BusinessException('Không thể hủy', code='INVALID_STATUS')
         if user.role == UserRole.CUSTOMER and order.status != ServiceOrderStatus.PENDING:
             raise BusinessException('Chỉ hủy được đơn pending', code='FORBIDDEN', status_code=403)
+        was_confirmed = order.status == ServiceOrderStatus.CONFIRMED
         order.status = ServiceOrderStatus.CANCELLED
         order.save(update_fields=['status', 'updated_at'])
+        # Trừ tiền khỏi booking nếu đơn đã được confirm trước đó
+        if was_confirmed:
+            booking = order.booking
+            booking.total_amount -= order.total_amount
+            booking.save(update_fields=['total_amount', 'updated_at'])
         return order
 
     @staticmethod

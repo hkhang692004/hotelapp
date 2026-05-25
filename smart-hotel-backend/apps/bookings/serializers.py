@@ -51,6 +51,12 @@ class BookingCreateSerializer(serializers.Serializer):
     check_out_date = serializers.DateField()
     adults = serializers.IntegerField(default=1, min_value=1)
     children = serializers.IntegerField(default=0, min_value=0)
+    app_return_url = serializers.URLField(required=False, allow_blank=True, default='')
+    payment_method = serializers.ChoiceField(
+        choices=[('vnpay', 'VNPay'), ('counter', 'Thanh toán tại quầy')],
+        default='vnpay',
+        required=False,
+    )
     rooms = serializers.ListField(
         child=serializers.DictField(),
         help_text='[{"room_type_id": "uuid", "quantity": 1}]',

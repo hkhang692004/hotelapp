@@ -45,7 +45,7 @@ class BookingService:
             Room.objects.select_for_update().filter(
                 room_type_id=room_type_id,
                 is_active=True,
-                status=RoomStatus.AVAILABLE,
+                status__in=[RoomStatus.AVAILABLE, RoomStatus.RESERVED],
             ).exclude(pk__in=busy).order_by('room_number')[:quantity]
         )
         if len(rooms) < quantity:

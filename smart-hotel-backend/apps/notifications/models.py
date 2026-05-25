@@ -7,6 +7,7 @@ from apps.core.models import BaseModel
 class NotificationType(models.TextChoices):
     BOOKING_CONFIRMED = 'booking_confirmed', 'Booking Confirmed'
     PAYMENT_RECEIVED = 'payment_received', 'Payment Received'
+    SERVICE_ORDER_CONFIRMED = 'service_order_confirmed', 'Service Order Confirmed'
     ROOM_READY = 'room_ready', 'Room Ready'
     PASSWORD_RESET = 'password_reset', 'Password Reset'
 

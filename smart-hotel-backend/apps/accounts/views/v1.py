@@ -60,6 +60,7 @@ from apps.core.schema import PARAM_PAGE, PARAM_PAGE_SIZE, PARAM_SEARCH, TAG_AUTH
 )
 class RegisterView(APIView):
     permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -70,6 +71,7 @@ class RegisterView(APIView):
             password=data['password'],
             full_name=data['full_name'],
             phone=data.get('phone', ''),
+            avatar=data.get('avatar'),
         )
         return Response(UserSerializer(user, context={'request': request}).data, status=status.HTTP_201_CREATED)
 

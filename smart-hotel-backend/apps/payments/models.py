@@ -27,7 +27,7 @@ class Payment(BaseModel):
     transaction_ref = models.CharField(max_length=100, blank=True, default='', db_index=True)
     vnp_transaction_no = models.CharField(max_length=32, blank=True, default='')
     paid_at = models.DateTimeField(null=True, blank=True)
-    payment_url = models.URLField(blank=True, default='')
+    payment_url = models.URLField(max_length=2000, blank=True, default='')
     gateway_meta = models.JSONField(default=dict, blank=True)
 
     class Meta:

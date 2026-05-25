@@ -28,10 +28,6 @@ class User(AbstractUser):
             self.full_name = f'{self.first_name} {self.last_name}'.strip()
         super().save(*args, **kwargs)
 
-    @property
-    def is_staff_role(self):
-        return self.role in UserRole.STAFF or self.is_superuser
-
 
 class StaffProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True, related_name='staff_profile')

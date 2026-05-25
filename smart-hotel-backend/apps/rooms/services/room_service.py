@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Q
 
 from apps.core.exceptions import BusinessException
 from apps.rooms.models import Room, RoomPrice, RoomStatus, RoomType
@@ -54,25 +54,30 @@ class RoomService:
         if check_out <= check_in:
             raise BusinessException('check_out phải sau check_in', code='INVALID_DATE_RANGE')
         nights = (check_out - check_in).days
-        room_types = RoomType.objects.filter(is_active=True).prefetch_related('amenities')
+        room_types = RoomType.objects.filter(is_active=True).prefetch_related('images')
         if room_type_id:
             room_types = room_types.filter(pk=room_type_id)
+        busy_room_ids = RoomService._busy_room_ids(check_in, check_out)
         results = []
         for rt in room_types:
             if adults + children > rt.max_occupancy:
                 continue
-            busy_room_ids = RoomService._busy_room_ids(check_in, check_out)
             available_count = Room.objects.filter(
                 room_type=rt,
                 is_active=True,
-                status=RoomStatus.AVAILABLE,
+                status__in=[RoomStatus.AVAILABLE, RoomStatus.RESERVED],
             ).exclude(pk__in=busy_room_ids).count()
             if available_count == 0:
                 continue
             price_per_night = RoomService.get_price_for_date(rt, check_in)
+            primary = next((img for img in rt.images.all() if img.is_active and img.is_primary), None)
+            if not primary:
+                primary = next((img for img in rt.images.all() if img.is_active), None)
             results.append({
                 'room_type_id': str(rt.id),
                 'name': rt.name,
+                'max_occupancy': rt.max_occupancy,
+                'primary_image': primary.image.url if primary and primary.image else '',
                 'available_count': available_count,
                 'price_per_night': str(price_per_night),
                 'total_price': str(price_per_night * nights),

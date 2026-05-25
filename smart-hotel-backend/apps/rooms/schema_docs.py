@@ -28,6 +28,8 @@ class AvailabilityQuerySerializer(serializers.Serializer):
 class AvailabilityRoomTypeSerializer(serializers.Serializer):
     room_type_id = serializers.UUIDField()
     name = serializers.CharField()
+    max_occupancy = serializers.IntegerField()
+    primary_image = serializers.CharField(allow_blank=True)
     available_count = serializers.IntegerField()
     price_per_night = serializers.CharField()
     total_price = serializers.CharField()

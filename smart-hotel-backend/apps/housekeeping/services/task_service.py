@@ -7,10 +7,40 @@ from apps.housekeeping.models import HousekeepingLog, HousekeepingTask, TaskStat
 from apps.rooms.models import RoomStatus
 
 
+def _broadcast_task_update():
+    """Broadcast sự kiện task_update đến tất cả client housekeeping đang kết nối."""
+    try:
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            'housekeeping',
+            {'type': 'housekeeping.task.update'},
+        )
+    except Exception:
+        pass  # Channels chưa setup hoặc không có client → bỏ qua
+
+
 class HousekeepingTaskService:
     @staticmethod
     def _log(task, action, user, note=''):
         HousekeepingLog.objects.create(task=task, action=action, performed_by=user, note=note)
+
+    @staticmethod
+    def _action_note(action, task, user, extra_note=''):
+        room_number = task.room.room_number if task and task.room_id else ''
+        base_notes = {
+            'created': f'Tạo task dọn phòng cho phòng {room_number}'.strip(),
+            'assigned': f'Giao task cho {task.assigned_to.full_name if task and task.assigned_to_id else ""}'.strip(),
+            'pending_to_in_progress': f'Bắt đầu dọn phòng {room_number}'.strip(),
+            'in_progress_to_completed': f'Hoàn tất dọn phòng {room_number}'.strip(),
+            'pending_to_cancelled': f'Hủy task phòng {room_number}'.strip(),
+            'in_progress_to_cancelled': f'Hủy task phòng {room_number}'.strip(),
+        }
+        note = base_notes.get(action, '')
+        if extra_note:
+            return f'{note}. {extra_note}'.strip('. ')
+        return note
 
     @staticmethod
     @transaction.atomic
@@ -28,7 +58,12 @@ class HousekeepingTaskService:
             priority='high',
             notes='Auto after checkout',
         )
-        HousekeepingTaskService._log(task, 'created', user, 'Auto checkout clean')
+        HousekeepingTaskService._log(
+            task,
+            'created',
+            user,
+            HousekeepingTaskService._action_note('created', task, user, 'Tạo tự động sau khi checkout'),
+        )
         return task
 
     @staticmethod
@@ -49,7 +84,13 @@ class HousekeepingTaskService:
             task_type=task_type or TaskType.DAILY_CLEAN,
             notes=notes or '',
         )
-        HousekeepingTaskService._log(task, 'created', user)
+        HousekeepingTaskService._log(
+            task,
+            'created',
+            user,
+            HousekeepingTaskService._action_note('created', task, user, notes or ''),
+        )
+        _broadcast_task_update()
         return task
 
     @staticmethod
@@ -64,12 +105,18 @@ class HousekeepingTaskService:
             raise BusinessException('Nhân viên housekeeping không tồn tại', code='NOT_FOUND', status_code=404)
         task.assigned_to = assigned
         task.save(update_fields=['assigned_to', 'updated_at'])
-        HousekeepingTaskService._log(task, 'assigned', user, f'Assigned to {assigned.full_name}')
+        HousekeepingTaskService._log(
+            task,
+            'assigned',
+            user,
+            HousekeepingTaskService._action_note('assigned', task, user, assigned.full_name),
+        )
+        _broadcast_task_update()
         return task
 
     @staticmethod
     @transaction.atomic
-    def update_status(task_id, new_status, user):
+    def update_status(task_id, new_status, user, note=''):
         task = HousekeepingTask.objects.select_related('room').filter(pk=task_id).first()
         if not task:
             raise BusinessException('Task không tồn tại', code='NOT_FOUND', status_code=404)
@@ -95,7 +142,12 @@ class HousekeepingTaskService:
             task.status = new_status
             task.save(update_fields=['status', 'updated_at'])
 
-        HousekeepingTaskService._log(task, f'{old}_to_{new_status}', user)
+        HousekeepingTaskService._log(
+            task,
+            f'{old}_to_{new_status}',
+            user,
+            HousekeepingTaskService._action_note(f'{old}_to_{new_status}', task, user, note),
+        )
         return task
 
     @staticmethod
@@ -108,6 +160,11 @@ class HousekeepingTaskService:
                 qs = qs.filter(assigned_to__isnull=True)
             return qs
         if user.role == UserRole.HOUSEKEEPING:
+            if assigned_to_me:
+                return qs.filter(assigned_to_id=user.id)
+            if unassigned:
+                return qs.filter(assigned_to__isnull=True)
+            # Không truyền filter -> thấy tất cả (task của mình + chưa giao)
             from django.db.models import Q
-            return qs.filter(Q(assigned_to_id=user.id) | Q(assigned_to__isnull=True, status=TaskStatus.PENDING))
+            return qs.filter(Q(assigned_to_id=user.id) | Q(assigned_to__isnull=True))
         return qs.none()

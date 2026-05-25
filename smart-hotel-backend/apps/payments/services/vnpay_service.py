@@ -3,7 +3,7 @@ import hmac
 import unicodedata
 from decimal import Decimal
 from datetime import timedelta
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -87,11 +87,26 @@ class VNPayService:
         return request.META.get('REMOTE_ADDR', '127.0.0.1')
 
     @staticmethod
-    def build_payment_url(payment, booking, request=None, bank_code=None, locale='vn'):
+    def append_query_param(url, key, value):
+        if not value:
+            return url
+
+        parsed = urlparse(url)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query[key] = value
+        return urlunparse(parsed._replace(query=urlencode(query)))
+
+    @staticmethod
+    def build_payment_url(payment, booking, request=None, bank_code=None, locale='vn', app_return_url=''):
         tmn_code = VNPayService._config('VNPAY_TMN_CODE')
         secret = VNPayService._config('VNPAY_HASH_SECRET')
         pay_url = VNPayService._config('VNPAY_PAY_URL')
-        return_url = VNPayService._config('VNPAY_RETURN_URL')
+        # Tự build return URL từ request host → không cần đổi .env khi IP thay đổi
+        if request is not None:
+            return_url = request.build_absolute_uri('/api/v1/payments/vnpay/return/')
+        else:
+            return_url = VNPayService._config('VNPAY_RETURN_URL')
+        return_url = VNPayService.append_query_param(return_url, 'app_return_url', app_return_url)
         ip_addr = VNPayService.get_client_ip(request) if request else '127.0.0.1'
 
         txn_ref = VNPayService.txn_ref_from_payment_id(payment.id)

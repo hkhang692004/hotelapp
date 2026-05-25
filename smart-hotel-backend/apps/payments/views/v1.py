@@ -1,4 +1,6 @@
-from django.http import JsonResponse
+import json
+
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import status
@@ -21,6 +23,10 @@ from apps.payments.serializers import (
 )
 from apps.payments.services.payment_service import PaymentService
 from apps.payments.services.vnpay_service import VNPayService
+
+
+class AppRedirect(HttpResponseRedirect):
+    allowed_schemes = [*HttpResponseRedirect.allowed_schemes, 'smarthotelapp', 'exp']
 
 
 @extend_schema_view(
@@ -120,22 +126,63 @@ class VNPayIPNView(APIView):
 class VNPayReturnView(APIView):
     permission_classes = [AllowAny]
 
-    def get(self, request):
-        valid, params = VNPayService.verify_return_params(request.GET)
-        if not valid:
-            return Response(
-                {'success': False, 'vnp_response_code': '97', 'message': 'Invalid Checksum'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        payment, vnp_params = PaymentService.process_vnpay_return(params)
-        payload = {
-            'payment': PaymentSerializer(payment).data,
-            'vnp_response_code': str(vnp_params.get('vnp_ResponseCode', '')),
-            'vnp_transaction_status': str(vnp_params.get('vnp_TransactionStatus', '')),
-            'vnp_transaction_no': str(vnp_params.get('vnp_TransactionNo', '')),
-            'success': VNPayService.is_payment_success(vnp_params),
+    @staticmethod
+    def _build_html(success: bool, booking_id: str | None = None, booking_code: str | None = None, message: str | None = None) -> HttpResponse:
+        data = {
+            'success': success,
+            'booking_id': booking_id,
+            'booking_code': booking_code,
+            'message': message or ('Thanh toán thành công!' if success else 'Thanh toán thất bại.'),
         }
-        return Response(payload)
+        color = '#4CAF50' if success else '#E53935'
+        icon = '✓' if success else '✗'
+        title = 'Thanh toán thành công!' if success else 'Thanh toán thất bại'
+        subtitle = 'Đang chuyển về ứng dụng...' if success else (message or 'Vui lòng thử lại trong ứng dụng.')
+        spinner = '<div class="loader"></div>' if success else ''
+        html = f"""<!DOCTYPE html>
+<html lang="vi"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Kết quả thanh toán</title>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1A1A2E;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center}}
+    .card{{background:rgba(255,255,255,.06);border-radius:20px;padding:48px 32px;max-width:340px;width:100%}}
+    .icon{{width:80px;height:80px;border-radius:50%;background:{color}22;border:2px solid {color};display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-size:36px;line-height:80px}}
+    .title{{font-size:20px;font-weight:700;margin-bottom:8px;color:{color}}}
+    .subtitle{{font-size:14px;color:#aaa;line-height:1.5;margin-bottom:20px}}
+    .loader{{display:inline-block;width:24px;height:24px;border:3px solid rgba(255,255,255,.2);border-top-color:#C9A84C;border-radius:50%;animation:spin .8s linear infinite}}
+    @keyframes spin{{to{{transform:rotate(360deg)}}}}
+  </style>
+</head><body>
+  <div class="card">
+    <div class="icon">{icon}</div>
+    <div class="title">{title}</div>
+    <div class="subtitle">{subtitle}</div>
+    {spinner}
+  </div>
+  <script>
+    var _d={json.dumps(data)};
+    if(window.ReactNativeWebView){{window.ReactNativeWebView.postMessage(JSON.stringify(_d));}}
+  </script>
+</body></html>"""
+        return HttpResponse(html, content_type='text/html; charset=utf-8')
+
+    def get(self, request):
+        vnp_params = {key: value for key, value in request.GET.items() if key.startswith('vnp_')}
+
+        valid, params = VNPayService.verify_return_params(vnp_params)
+        if not valid:
+            return self._build_html(False, message='Chữ ký không hợp lệ.')
+
+        try:
+            payment, vnp_params = PaymentService.process_vnpay_return(params)
+            success = VNPayService.is_payment_success(vnp_params)
+            booking_id = str(payment.booking_id)
+            booking_code = str(payment.booking.booking_code)
+            return self._build_html(success, booking_id=booking_id, booking_code=booking_code)
+        except Exception as exc:
+            return self._build_html(False, message=str(exc))
 
 
 @extend_schema_view(

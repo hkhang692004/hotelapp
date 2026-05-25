@@ -1,7 +1,23 @@
 from decimal import Decimal
+from io import BytesIO
+from pathlib import Path
+from urllib.request import urlopen
 
+from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.db import transaction
+from django.db.models import Case, DecimalField, F, Sum, Value, When
+from django.db.models.functions import Coalesce
 from django.utils import timezone
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import Image as RLImage, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 from apps.bookings.models import Booking, BookingStatus
 from apps.core.exceptions import BusinessException
@@ -10,6 +26,177 @@ from apps.payments.services.vnpay_service import VNPayService
 
 
 class PaymentService:
+    _fonts_registered = False
+    LOGO_URL = 'https://res.cloudinary.com/dblzpkokm/image/upload/v1779649199/hotel4_ejlhzz.jpg'
+    COMPANY_PHONE = '0901 234 567'
+    COMPANY_ADDRESS = '123 Ngô Gia Tự, P. 3, Q. 10, TP. Hồ Chí Minh'
+    COMPANY_TAX_ID = '0312345678'
+
+    @staticmethod
+    def _register_pdf_fonts():
+        if PaymentService._fonts_registered:
+            return
+        pdfmetrics.registerFont(TTFont('SmartHotel', r'C:\\Windows\\Fonts\\arial.ttf'))
+        pdfmetrics.registerFont(TTFont('SmartHotel-Bold', r'C:\\Windows\\Fonts\\arialbd.ttf'))
+        pdfmetrics.registerFontFamily(
+            'SmartHotel',
+            normal='SmartHotel',
+            bold='SmartHotel-Bold',
+            italic='SmartHotel',
+            boldItalic='SmartHotel-Bold',
+        )
+        PaymentService._fonts_registered = True
+
+    @staticmethod
+    def _build_logo_image(width=22 * mm, height=22 * mm):
+        try:
+            logo_bytes = urlopen(PaymentService.LOGO_URL, timeout=8).read()
+            return RLImage(BytesIO(logo_bytes), width=width, height=height)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _render_invoice_pdf(invoice):
+        PaymentService._register_pdf_fonts()
+        booking = invoice.booking
+        customer = booking.customer
+
+        pdf_buffer = BytesIO()
+        pdf_doc = SimpleDocTemplate(
+            pdf_buffer,
+            pagesize=A4,
+            rightMargin=18 * mm,
+            leftMargin=18 * mm,
+            topMargin=18 * mm,
+            bottomMargin=18 * mm,
+            title=f'Invoice {invoice.invoice_number}',
+            author='Smart Hotel',
+        )
+        styles = getSampleStyleSheet()
+        styles.add(ParagraphStyle(name='InvoiceHeader', parent=styles['Title'], fontName='SmartHotel-Bold', fontSize=22, leading=26, textColor=colors.white))
+        styles.add(ParagraphStyle(name='InvoiceSubHeader', parent=styles['BodyText'], fontName='SmartHotel', fontSize=9.5, leading=13, textColor=colors.HexColor('#D7DBF0')))
+        styles.add(ParagraphStyle(name='InvoiceLabel', parent=styles['BodyText'], fontName='SmartHotel-Bold', fontSize=9.5, leading=12, textColor=colors.HexColor('#1A1A2E')))
+        styles.add(ParagraphStyle(name='InvoiceText', parent=styles['BodyText'], fontName='SmartHotel', fontSize=10.5, leading=14, textColor=colors.HexColor('#222222')))
+        styles.add(ParagraphStyle(name='InvoiceTotal', parent=styles['BodyText'], fontName='SmartHotel-Bold', fontSize=12, leading=15, textColor=colors.HexColor('#1A1A2E')))
+
+        issue_date = invoice.issued_at.strftime('%d/%m/%Y %H:%M') if invoice.issued_at else ''
+        logo = PaymentService._build_logo_image()
+        logo_block = logo if logo else Paragraph('Smart Hotel', styles['InvoiceHeader'])
+        header_table = Table([
+            [
+                logo_block,
+                Paragraph(
+                    f'<b>HÓA ĐƠN ĐIỆN TỬ</b><br/>'
+                    f'<b>Số hóa đơn:</b> {invoice.invoice_number}<br/>'
+                    f'<b>Ngày phát hành:</b> {issue_date}<br/>'
+                    f'<b>Trạng thái:</b> Đã thanh toán',
+                    styles['InvoiceSubHeader'],
+                ),
+            ]
+        ], colWidths=[40 * mm, 133 * mm])
+        header_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1A1A2E')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 14),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 14),
+            ('TOPPADDING', (0, 0), (-1, -1), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+            ('BOX', (0, 0), (-1, -1), 0.8, colors.HexColor('#1A1A2E')),
+        ]))
+
+        info_table = Table([
+            [
+                Paragraph(
+                    '<b>Đơn vị bán hàng</b><br/>'
+                    'Smart Hotel<br/>'
+                    'Hệ thống quản lý khách sạn<br/>'
+                    f'Địa chỉ: {PaymentService.COMPANY_ADDRESS}<br/>'
+                    f'Điện thoại: {PaymentService.COMPANY_PHONE}<br/>'
+                    f'MST: {PaymentService.COMPANY_TAX_ID}',
+                    styles['InvoiceText'],
+                ),
+                Paragraph(
+                    f'<b>Khách hàng</b><br/>{customer.full_name}<br/>{customer.email}<br/>'
+                    f'<b>Booking:</b> {booking.booking_code}<br/>'
+                    f'<b>Nhận phòng:</b> {booking.check_in_date} | <b>Trả phòng:</b> {booking.check_out_date}',
+                    styles['InvoiceText'],
+                ),
+            ]
+        ], colWidths=[86 * mm, 87 * mm])
+        info_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F7F8FC')),
+            ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#D9D9E5')),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D9D9E5')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ]))
+
+        elements = [header_table, Spacer(1, 5 * mm), info_table, Spacer(1, 7 * mm)]
+
+        table_data = [[
+            Paragraph('<b>Mô tả</b>', styles['InvoiceLabel']),
+            Paragraph('<b>Đêm</b>', styles['InvoiceLabel']),
+            Paragraph('<b>Thành tiền</b>', styles['InvoiceLabel']),
+        ]]
+        for br in booking.booking_rooms.all():
+            table_data.append([
+                Paragraph(f'{br.room_type.name} - {br.room.room_number}', styles['InvoiceText']),
+                Paragraph(str(br.nights), styles['InvoiceText']),
+                Paragraph(f'{br.subtotal:,.0f} đ', styles['InvoiceText']),
+            ])
+        table = Table(table_data, colWidths=[95 * mm, 20 * mm, 40 * mm], repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E9ECF8')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1A1A2E')),
+            ('FONTNAME', (0, 0), (-1, -1), 'SmartHotel'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
+            ('ALIGN', (1, 1), (1, -1), 'CENTER'),
+            ('ALIGN', (2, 1), (2, -1), 'RIGHT'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D9D9E5')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFAFC')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ]))
+        elements.append(table)
+        elements.append(Spacer(1, 6 * mm))
+
+        summary_table = Table([
+            [Paragraph('Tạm tính', styles['InvoiceText']), Paragraph(f'{invoice.subtotal:,.0f} đ', styles['InvoiceText'])],
+            [Paragraph('Thuế (10%)', styles['InvoiceText']), Paragraph(f'{invoice.tax:,.0f} đ', styles['InvoiceText'])],
+            [Paragraph('Chiết khấu', styles['InvoiceText']), Paragraph(f'{invoice.discount:,.0f} đ', styles['InvoiceText'])],
+            [Paragraph('Tổng cộng', styles['InvoiceTotal']), Paragraph(f'{invoice.total:,.0f} đ', styles['InvoiceTotal'])],
+        ], colWidths=[110 * mm, 55 * mm])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 3), (-1, 3), colors.HexColor('#FFF1D6')),
+            ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#D9D9E5')),
+            ('INNERGRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#D9D9E5')),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 6 * mm))
+        elements.append(Paragraph('Cảm ơn bạn đã sử dụng dịch vụ Smart Hotel.', styles['InvoiceText']))
+        pdf_doc.build(elements)
+        pdf_bytes = pdf_buffer.getvalue()
+        pdf_buffer.close()
+        return pdf_bytes
+
+    @staticmethod
+    def _store_invoice_pdf(invoice, pdf_bytes):
+        filename = f'invoices/{invoice.invoice_number}.pdf'
+        saved_name = default_storage.save(filename, ContentFile(pdf_bytes))
+        invoice.pdf_url = default_storage.url(saved_name)
+        invoice.save(update_fields=['pdf_url', 'updated_at'])
+        return invoice.pdf_url
+
     @staticmethod
     def _generate_invoice_number():
         prefix = timezone.now().strftime('INV-%Y')
@@ -21,13 +208,174 @@ class PaymentService:
         return f'TXN-{timezone.now().strftime("%Y%m%d%H%M%S")}-{Payment.objects.count() + 1}'
 
     @staticmethod
+    def _booking_payable_total(booking):
+        subtotal = booking.total_amount
+        tax = (subtotal * Decimal('0.10')).quantize(Decimal('0.01'))
+        return (subtotal + tax).quantize(Decimal('0.01'))
+
+    @staticmethod
+    def _booking_net_paid(booking):
+        # Net paid = all credit transactions - all debit(refund) transactions.
+        paid_data = Transaction.objects.filter(payment__booking=booking, is_active=True).aggregate(
+            net=Coalesce(
+                Sum(
+                    Case(
+                        When(transaction_type='credit', then=F('amount')),
+                        When(transaction_type='debit', then=-F('amount')),
+                        default=Value(Decimal('0.00')),
+                        output_field=DecimalField(max_digits=14, decimal_places=2),
+                    )
+                ),
+                Value(Decimal('0.00')),
+            )
+        )
+        return Decimal(paid_data['net']).quantize(Decimal('0.01'))
+
+    @staticmethod
+    def _booking_remaining_amount(booking):
+        remaining = PaymentService._booking_payable_total(booking) - PaymentService._booking_net_paid(booking)
+        if remaining < Decimal('0.00'):
+            return Decimal('0.00')
+        return remaining.quantize(Decimal('0.01'))
+
+    @staticmethod
+    def _ensure_invoice(booking):
+        invoice = Invoice.objects.filter(booking=booking).first()
+        if invoice:
+            if not invoice.pdf_url:
+                pdf_bytes = PaymentService._render_invoice_pdf(invoice)
+                PaymentService._store_invoice_pdf(invoice, pdf_bytes)
+            return invoice, False
+
+        subtotal = booking.total_amount
+        tax = (subtotal * Decimal('0.10')).quantize(Decimal('0.01'))
+        total = subtotal + tax
+        invoice = Invoice.objects.create(
+            invoice_number=PaymentService._generate_invoice_number(),
+            booking=booking,
+            subtotal=subtotal,
+            tax=tax,
+            discount=Decimal('0'),
+            total=total,
+        )
+        pdf_bytes = PaymentService._render_invoice_pdf(invoice)
+        PaymentService._store_invoice_pdf(invoice, pdf_bytes)
+        return invoice, True
+
+    @staticmethod
+    def _send_invoice_email(invoice_id):
+        PaymentService._register_pdf_fonts()
+        invoice = Invoice.objects.select_related('booking', 'booking__customer').prefetch_related(
+            'booking__booking_rooms__room',
+            'booking__booking_rooms__room_type',
+        ).filter(pk=invoice_id).first()
+        if not invoice:
+            return
+
+        booking = invoice.booking
+        customer = booking.customer
+        if not customer.email:
+            return
+        pdf_bytes = PaymentService._render_invoice_pdf(invoice)
+        pdf_url = invoice.pdf_url or PaymentService._store_invoice_pdf(invoice, pdf_bytes)
+        pdf_filename = Path(pdf_url).name if pdf_url else f'invoice-{invoice.invoice_number}.pdf'
+
+        line_rows = []
+        for br in booking.booking_rooms.all():
+            line_rows.append(
+                f'<tr>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;">{br.room_type.name} - {br.room.room_number}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">{br.nights}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{br.subtotal:,.0f} đ</td>'
+                f'</tr>'
+            )
+
+        subject = f'[Smart Hotel] Hóa đơn {invoice.invoice_number}'
+        text_body = (
+            f'Xin chào {customer.full_name},\n\n'
+                        f'Đính kèm file PDF bản sao điện tử hóa đơn cho booking {booking.booking_code}.\n\n'
+                        f'Smart Hotel | MST: {PaymentService.COMPANY_TAX_ID} | SĐT: {PaymentService.COMPANY_PHONE}\n'
+                        f'Địa chỉ: {PaymentService.COMPANY_ADDRESS}\n\n'
+            f'Số hóa đơn: {invoice.invoice_number}\n'
+            f'Tổng tạm tính: {invoice.subtotal:,.0f} đ\n'
+            f'Thuế: {invoice.tax:,.0f} đ\n'
+            f'Chiết khấu: {invoice.discount:,.0f} đ\n'
+            f'Tổng cộng: {invoice.total:,.0f} đ\n\n'
+            f'Trân trọng,\nSmart Hotel'
+        )
+        html_body = f'''
+        <div style="font-family:Arial,sans-serif;color:#222;line-height:1.6">
+                    <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
+                        <img src="{PaymentService.LOGO_URL}" alt="Smart Hotel" style="width:56px;height:56px;border-radius:12px;object-fit:cover;" />
+                        <div>
+                            <h2 style="margin:0 0 4px">Smart Hotel</h2>
+                            <div style="font-size:12px;color:#666;">Hóa đơn điện tử</div>
+                        </div>
+                    </div>
+          <p>Xin chào <b>{customer.full_name}</b>,</p>
+                    <p>Đây là file PDF bản sao điện tử hóa đơn cho booking <b>{booking.booking_code}</b>.</p>
+                    <p style="margin:0 0 12px;font-size:13px;color:#555;">
+                        Địa chỉ: {PaymentService.COMPANY_ADDRESS}<br/>
+                        Điện thoại: {PaymentService.COMPANY_PHONE}<br/>
+                        MST: {PaymentService.COMPANY_TAX_ID}
+                    </p>
+          <div style="background:#f7f7fb;border:1px solid #e7e7ef;border-radius:12px;padding:16px;margin:16px 0;">
+            <p style="margin:0 0 6px"><b>Số hóa đơn:</b> {invoice.invoice_number}</p>
+            <p style="margin:0 0 6px"><b>Nhận phòng:</b> {booking.check_in_date}</p>
+            <p style="margin:0 0 6px"><b>Trả phòng:</b> {booking.check_out_date}</p>
+            <p style="margin:0 0 6px"><b>Tổng cộng:</b> {invoice.total:,.0f} đ</p>
+          </div>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:8px;border-bottom:2px solid #ddd;">Mô tả</th>
+                <th style="text-align:center;padding:8px;border-bottom:2px solid #ddd;">Đêm</th>
+                <th style="text-align:right;padding:8px;border-bottom:2px solid #ddd;">Thành tiền</th>
+              </tr>
+            </thead>
+            <tbody>
+              {''.join(line_rows)}
+            </tbody>
+          </table>
+          <p style="margin:0 0 4px"><b>Tạm tính:</b> {invoice.subtotal:,.0f} đ</p>
+          <p style="margin:0 0 4px"><b>Thuế:</b> {invoice.tax:,.0f} đ</p>
+          <p style="margin:0 0 4px"><b>Chiết khấu:</b> {invoice.discount:,.0f} đ</p>
+          <p style="margin:0 0 16px"><b>Tổng cộng:</b> {invoice.total:,.0f} đ</p>
+        </div>
+        '''
+
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[customer.email],
+        )
+        email.attach_alternative(html_body, 'text/html')
+        email.attach(pdf_filename, pdf_bytes, 'application/pdf')
+        email.send(fail_silently=True)
+
+    @staticmethod
     @transaction.atomic
-    def create_payment(booking_id, amount, method, user, request=None, bank_code=None, locale='vn'):
+    def create_payment(booking_id, amount, method, user, request=None, bank_code=None, locale='vn', app_return_url=''):
         booking = Booking.objects.filter(pk=booking_id, is_active=True).first()
         if not booking:
             raise BusinessException('Booking không tồn tại', code='NOT_FOUND', status_code=404)
         if booking.status == BookingStatus.CANCELLED:
             raise BusinessException('Booking đã hủy', code='INVALID_BOOKING')
+
+        remaining = PaymentService._booking_remaining_amount(booking)
+        if remaining <= Decimal('0.00'):
+            raise BusinessException('Booking đã được thanh toán đủ', code='ALREADY_PAID')
+
+        amount = Decimal(amount).quantize(Decimal('0.01'))
+        if amount <= Decimal('0.00'):
+            raise BusinessException('Số tiền thanh toán phải lớn hơn 0', code='INVALID_AMOUNT')
+        if amount > remaining:
+            raise BusinessException(
+                f'Số tiền vượt quá phần còn lại ({remaining:,.0f} đ)',
+                code='INVALID_AMOUNT',
+                status_code=422,
+            )
 
         payment = Payment.objects.create(
             booking=booking,
@@ -55,11 +403,12 @@ class PaymentService:
                 NotificationService.payment_received(payment)
             except Exception:
                 pass
+            invoice, created = PaymentService._ensure_invoice(booking)
         elif method == PaymentMethod.VNPAY:
             payment.save()
             payment.transaction_ref = VNPayService.txn_ref_from_payment_id(payment.id)
             payment.payment_url = VNPayService.build_payment_url(
-                payment, booking, request=request, bank_code=bank_code, locale=locale,
+                payment, booking, request=request, bank_code=bank_code, locale=locale, app_return_url=app_return_url,
             )
             payment.save(update_fields=['transaction_ref', 'payment_url', 'updated_at'])
         elif method in (PaymentMethod.MOMO, PaymentMethod.CARD, PaymentMethod.BANK_TRANSFER):
@@ -99,6 +448,8 @@ class PaymentService:
             NotificationService.payment_received(payment)
         except Exception:
             pass
+        invoice, created = PaymentService._ensure_invoice(payment.booking)
+        transaction.on_commit(lambda invoice_id=invoice.id: PaymentService._send_invoice_email(invoice_id))
         return payment
 
     @staticmethod
@@ -173,6 +524,8 @@ class PaymentService:
             NotificationService.payment_received(payment)
         except Exception:
             pass
+        invoice, created = PaymentService._ensure_invoice(payment.booking)
+        transaction.on_commit(lambda invoice_id=invoice.id: PaymentService._send_invoice_email(invoice_id))
         return payment
 
     @staticmethod
@@ -201,17 +554,7 @@ class PaymentService:
         booking = Booking.objects.prefetch_related('booking_rooms').filter(pk=booking_id).first()
         if not booking:
             raise BusinessException('Booking không tồn tại', code='NOT_FOUND', status_code=404)
-        subtotal = booking.total_amount
-        tax = (subtotal * Decimal('0.10')).quantize(Decimal('0.01'))
-        total = subtotal + tax
-        invoice = Invoice.objects.create(
-            invoice_number=PaymentService._generate_invoice_number(),
-            booking=booking,
-            subtotal=subtotal,
-            tax=tax,
-            discount=Decimal('0'),
-            total=total,
-        )
+        invoice, _ = PaymentService._ensure_invoice(booking)
         return invoice
 
     @staticmethod

@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.constants import UserRole
+from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsHousekeeping, IsManagerOrReceptionist
 from apps.core.schema import PARAM_PAGE, PARAM_PAGE_SIZE, TAG_HOUSEKEEPING
 from apps.housekeeping.models import HousekeepingTask
@@ -52,8 +53,10 @@ class HousekeepingTaskListCreateView(APIView):
         floor = request.query_params.get('floor')
         if floor:
             qs = qs.filter(room__floor=floor)
-        data = HousekeepingTaskSerializer(qs.order_by('-created_at')[:100], many=True).data
-        return Response({'data': data, 'meta': {'total_count': len(data)}})
+        qs = qs.order_by('-created_at')
+        paginator = StandardPagination()
+        page_data = paginator.paginate_queryset(qs, request)
+        return paginator.get_paginated_response(HousekeepingTaskSerializer(page_data, many=True).data)
 
     def post(self, request):
         if request.user.role not in (UserRole.MANAGER, UserRole.RECEPTIONIST) and not request.user.is_superuser:
@@ -77,7 +80,8 @@ class HousekeepingTaskDetailView(APIView):
         serializer = HousekeepingTaskUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         if 'status' in serializer.validated_data:
-            task = HousekeepingTaskService.update_status(pk, serializer.validated_data['status'], request.user)
+            note = serializer.validated_data.get('notes', '') or ''
+            task = HousekeepingTaskService.update_status(pk, serializer.validated_data['status'], request.user, note=note)
         else:
             task = get_object_or_404(HousekeepingTaskService.queryset_for_user(request.user), pk=pk)
             if 'notes' in request.data:

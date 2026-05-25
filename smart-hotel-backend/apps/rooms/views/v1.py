@@ -279,8 +279,14 @@ class AvailabilityView(APIView):
                 {'check_in': ['Bắt buộc'], 'check_out': ['Bắt buộc']},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        check_in_date = datetime.strptime(check_in, '%Y-%m-%d').date()
-        check_out_date = datetime.strptime(check_out, '%Y-%m-%d').date()
+        try:
+            check_in_date = datetime.strptime(check_in, '%Y-%m-%d').date()
+            check_out_date = datetime.strptime(check_out, '%Y-%m-%d').date()
+        except ValueError:
+            return Response(
+                {'detail': 'Ngày không hợp lệ. Định dạng đúng: YYYY-MM-DD.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         adults = int(request.query_params.get('adults', 1))
         children = int(request.query_params.get('children', 0))
         room_type_id = request.query_params.get('room_type_id')
