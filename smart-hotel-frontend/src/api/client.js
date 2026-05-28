@@ -1,0 +1,67 @@
+import axios from 'axios'
+
+const API_URL = import.meta.env.VITE_API_URL || '/api/v1'
+
+export const api = axios.create({
+  baseURL: API_URL,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+let refreshPromise = null
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const original = error.config
+    if (error.response?.status !== 401 || original._retry) {
+      return Promise.reject(error)
+    }
+    original._retry = true
+    const refresh = localStorage.getItem('refresh_token')
+    if (!refresh) {
+      return Promise.reject(error)
+    }
+    if (!refreshPromise) {
+      refreshPromise = axios
+        .post(`${API_URL}/auth/token/refresh/`, { refresh })
+        .then((res) => {
+          const access = res.data?.data?.access || res.data?.access
+          localStorage.setItem('access_token', access)
+          return access
+        })
+        .finally(() => {
+          refreshPromise = null
+        })
+    }
+    try {
+      const access = await refreshPromise
+      original.headers.Authorization = `Bearer ${access}`
+      return api(original)
+    } catch {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+      return Promise.reject(error)
+    }
+  },
+)
+
+export function unwrap(response) {
+  return response.data?.data ?? response.data
+}
+
+export function unwrapList(response) {
+  return {
+    items: response.data?.data ?? [],
+    meta: response.data?.meta ?? {},
+  }
+}

@@ -153,7 +153,7 @@ export default function BookingCreate({ route, navigation }) {
             } else {
                 Alert.alert(
                     "Đặt phòng thành công",
-                    `Mã đặt phòng: ${booking.booking_code}\nĐơn đã được xác nhận, thanh toán tại quầy khi đến khách sạn.`,
+                    `Mã đặt phòng: ${booking.booking_code}\nĐơn đang chờ xác nhận, vui lòng thanh toán tại quầy khi đến khách sạn.`,
                     [
                         {
                             text: "Xem chi tiết",

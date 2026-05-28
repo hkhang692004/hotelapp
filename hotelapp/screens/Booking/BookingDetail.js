@@ -74,8 +74,13 @@ export default function BookingDetail({ route, navigation }) {
             setShowCancelModal(false);
             setCancelReason("");
             load();
-        } catch {
-            Alert.alert("Lỗi", "Không thể hủy đặt phòng. Vui lòng thử lại.");
+        } catch (err) {
+            const status = err?.response?.status;
+            if (status === 403) {
+                Alert.alert("Không thể hủy", "Bạn chỉ có thể hủy đặt phòng ở trạng thái chờ xác nhận.");
+            } else {
+                Alert.alert("Lỗi", "Không thể hủy đặt phòng. Vui lòng thử lại.");
+            }
         } finally {
             setCancelling(false);
         }
@@ -102,7 +107,7 @@ export default function BookingDetail({ route, navigation }) {
     }
 
     const color = STATUS_COLOR[booking.status] ?? "#888";
-    const canCancel = ["pending", "confirmed"].includes(booking.status);
+    const canCancel = user?.role === "customer" && booking.status === "pending";
 
     return (
         <SafeAreaView style={styles.safe}>

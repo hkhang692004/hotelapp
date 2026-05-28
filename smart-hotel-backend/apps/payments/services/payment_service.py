@@ -167,12 +167,11 @@ class PaymentService:
 
         summary_table = Table([
             [Paragraph('Tạm tính', styles['InvoiceText']), Paragraph(f'{invoice.subtotal:,.0f} đ', styles['InvoiceText'])],
-            [Paragraph('Thuế (10%)', styles['InvoiceText']), Paragraph(f'{invoice.tax:,.0f} đ', styles['InvoiceText'])],
             [Paragraph('Chiết khấu', styles['InvoiceText']), Paragraph(f'{invoice.discount:,.0f} đ', styles['InvoiceText'])],
             [Paragraph('Tổng cộng', styles['InvoiceTotal']), Paragraph(f'{invoice.total:,.0f} đ', styles['InvoiceTotal'])],
         ], colWidths=[110 * mm, 55 * mm])
         summary_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 3), (-1, 3), colors.HexColor('#FFF1D6')),
+            ('BACKGROUND', (0, 2), (-1, 2), colors.HexColor('#FFF1D6')),
             ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#D9D9E5')),
             ('INNERGRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#D9D9E5')),
             ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
@@ -210,8 +209,7 @@ class PaymentService:
     @staticmethod
     def _booking_payable_total(booking):
         subtotal = booking.total_amount
-        tax = (subtotal * Decimal('0.10')).quantize(Decimal('0.01'))
-        return (subtotal + tax).quantize(Decimal('0.01'))
+        return subtotal.quantize(Decimal('0.01'))
 
     @staticmethod
     def _booking_net_paid(booking):
@@ -242,14 +240,28 @@ class PaymentService:
     def _ensure_invoice(booking):
         invoice = Invoice.objects.filter(booking=booking).first()
         if invoice:
-            if not invoice.pdf_url:
+            expected_total = (invoice.subtotal - invoice.discount).quantize(Decimal('0.01'))
+            update_fields = []
+            invoice_changed = False
+            if invoice.tax != Decimal('0.00'):
+                invoice.tax = Decimal('0.00')
+                update_fields.append('tax')
+                invoice_changed = True
+            if invoice.total != expected_total:
+                invoice.total = expected_total
+                update_fields.append('total')
+                invoice_changed = True
+            if update_fields:
+                update_fields.append('updated_at')
+                invoice.save(update_fields=update_fields)
+            if invoice_changed or not invoice.pdf_url:
                 pdf_bytes = PaymentService._render_invoice_pdf(invoice)
                 PaymentService._store_invoice_pdf(invoice, pdf_bytes)
             return invoice, False
 
         subtotal = booking.total_amount
-        tax = (subtotal * Decimal('0.10')).quantize(Decimal('0.01'))
-        total = subtotal + tax
+        tax = Decimal('0.00')
+        total = subtotal.quantize(Decimal('0.01'))
         invoice = Invoice.objects.create(
             invoice_number=PaymentService._generate_invoice_number(),
             booking=booking,
@@ -298,7 +310,6 @@ class PaymentService:
                         f'Địa chỉ: {PaymentService.COMPANY_ADDRESS}\n\n'
             f'Số hóa đơn: {invoice.invoice_number}\n'
             f'Tổng tạm tính: {invoice.subtotal:,.0f} đ\n'
-            f'Thuế: {invoice.tax:,.0f} đ\n'
             f'Chiết khấu: {invoice.discount:,.0f} đ\n'
             f'Tổng cộng: {invoice.total:,.0f} đ\n\n'
             f'Trân trọng,\nSmart Hotel'
@@ -338,7 +349,6 @@ class PaymentService:
             </tbody>
           </table>
           <p style="margin:0 0 4px"><b>Tạm tính:</b> {invoice.subtotal:,.0f} đ</p>
-          <p style="margin:0 0 4px"><b>Thuế:</b> {invoice.tax:,.0f} đ</p>
           <p style="margin:0 0 4px"><b>Chiết khấu:</b> {invoice.discount:,.0f} đ</p>
           <p style="margin:0 0 16px"><b>Tổng cộng:</b> {invoice.total:,.0f} đ</p>
         </div>

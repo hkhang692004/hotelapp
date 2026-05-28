@@ -120,8 +120,7 @@ class BookingListCreateView(APIView):
             )
             message = 'Đơn đặt phòng đã được tạo. Vui lòng thanh toán VNPay để xác nhận.'
         else:
-            booking = BookingService.transition(booking, BookingStatus.CONFIRMED, request.user, 'Customer pay at counter')
-            message = 'Đơn đặt phòng đã được xác nhận. Thanh toán tại quầy khi đến khách sạn.'
+            message = 'Đơn đặt phòng đã được tạo ở trạng thái chờ xác nhận. Vui lòng thanh toán tại quầy khi đến khách sạn.'
 
         return Response({
             'booking': BookingDetailSerializer(booking).data,
