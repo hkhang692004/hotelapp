@@ -13,7 +13,6 @@ from apps.core.permissions import IsManager, IsManagerOrReceptionist
 from apps.core.schema import PARAM_PAGE, PARAM_PAGE_SIZE, TAG_INVOICES, TAG_PAYMENTS
 from apps.payments.models import Invoice
 from apps.payments.serializers import (
-    InvoiceCreateSerializer,
     InvoiceSerializer,
     PaymentCreateSerializer,
     PaymentRefundSerializer,
@@ -139,6 +138,17 @@ class VNPayReturnView(APIView):
         title = 'Thanh toán thành công!' if success else 'Thanh toán thất bại'
         subtitle = 'Đang chuyển về ứng dụng...' if success else (message or 'Vui lòng thử lại trong ứng dụng.')
         spinner = '<div class="loader"></div>' if success else ''
+        
+        # Tạo query string cho web redirect
+        query_string = f"?success={'1' if success else '0'}"
+        if booking_id:
+            query_string += f"&booking_id={booking_id}"
+        if booking_code:
+            query_string += f"&booking_code={booking_code}"
+        if message:
+            from urllib.parse import quote
+            query_string += f"&message={quote(message)}"
+        
         html = f"""<!DOCTYPE html>
 <html lang="vi"><head>
   <meta charset="UTF-8">
@@ -163,7 +173,20 @@ class VNPayReturnView(APIView):
   </div>
   <script>
     var _d={json.dumps(data)};
-    if(window.ReactNativeWebView){{window.ReactNativeWebView.postMessage(JSON.stringify(_d));}}
+    var isWebView = !!window.ReactNativeWebView;
+    var isWeb = !isWebView;
+    
+    if(isWebView){{
+      // Mobile WebView: gửi message về app
+      window.ReactNativeWebView.postMessage(JSON.stringify(_d));
+    }} else {{
+      // Web Browser: redirect về frontend sau 2 giây
+      setTimeout(function(){{
+        var frontendUrl = window.location.origin.replace(':8000', ':5173');
+        var redirectUrl = frontendUrl + '/payments/vnpay/return{query_string}';
+        window.location.href = redirectUrl;
+      }}, 2000);
+    }}
   </script>
 </body></html>"""
         return HttpResponse(html, content_type='text/html; charset=utf-8')
@@ -227,7 +250,6 @@ class PaymentRefundView(APIView):
         parameters=[PARAM_PAGE, PARAM_PAGE_SIZE, OpenApiParameter(name='booking_id', type=str, location=OpenApiParameter.QUERY)],
         responses={200: InvoiceSerializer(many=True)},
     ),
-    post=extend_schema(tags=[TAG_INVOICES], summary='Tạo hóa đơn từ booking', request=InvoiceCreateSerializer, responses={201: InvoiceSerializer}),
 )
 class InvoiceListCreateView(APIView):
     permission_classes = [IsManagerOrReceptionist]
@@ -240,12 +262,6 @@ class InvoiceListCreateView(APIView):
         paginator = StandardPagination()
         page = paginator.paginate_queryset(qs.order_by('-issued_at'), request)
         return paginator.get_paginated_response(InvoiceSerializer(page, many=True).data)
-
-    def post(self, request):
-        serializer = InvoiceCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        invoice = PaymentService.create_invoice(serializer.validated_data['booking_id'])
-        return Response(InvoiceSerializer(invoice).data, status=status.HTTP_201_CREATED)
 
 
 @extend_schema_view(

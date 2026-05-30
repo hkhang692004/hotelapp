@@ -8,6 +8,7 @@ import { CustomersPage } from '../pages/customers/CustomersPage'
 import { DashboardPage } from '../pages/dashboard/DashboardPage'
 import { HousekeepingPage } from '../pages/housekeeping/HousekeepingPage'
 import { PaymentsPage } from '../pages/payments/PaymentsPage'
+import { VNPayReturnPage } from '../pages/payments/VNPayReturnPage'
 import { RoomsPage } from '../pages/rooms/RoomsPage'
 import { ServicesPage } from '../pages/services/ServicesPage'
 import { StaffPage } from '../pages/staff/StaffPage'
@@ -19,6 +20,8 @@ export function AppRoutes() {
       <Route element={<GuestRoute />}>
         <Route path="/login" element={<LoginPage />} />
       </Route>
+
+      <Route path="/payments/vnpay/return" element={<VNPayReturnPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>

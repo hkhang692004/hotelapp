@@ -65,7 +65,7 @@ class RoomService:
             available_count = Room.objects.filter(
                 room_type=rt,
                 is_active=True,
-                status__in=[RoomStatus.AVAILABLE, RoomStatus.RESERVED],
+                status__in=[RoomStatus.AVAILABLE, RoomStatus.RESERVED, RoomStatus.CLEANING],
             ).exclude(pk__in=busy_room_ids).count()
             if available_count == 0:
                 continue

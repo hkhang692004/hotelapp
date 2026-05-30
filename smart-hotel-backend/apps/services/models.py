@@ -29,6 +29,10 @@ class Service(BaseModel):
     description = models.TextField(blank=True, default='')
     price = models.DecimalField(max_digits=12, decimal_places=2)
     unit = models.CharField(max_length=50, default='per_person')
+    is_staff_only = models.BooleanField(
+        default=False,
+        help_text='Chỉ nhân viên thấy (tiền cọc, minibar, hư hỏng, …)',
+    )
 
     class Meta:
         db_table = 'hotel_service'
@@ -43,6 +47,7 @@ class ServiceOrder(BaseModel):
     status = models.CharField(max_length=20, choices=ServiceOrderStatus.choices, default=ServiceOrderStatus.PENDING)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     scheduled_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True, help_text='Thời điểm được confirm hoặc tạo với status CONFIRMED')
     note = models.TextField(blank=True, default='')
 
     class Meta:
@@ -51,7 +56,8 @@ class ServiceOrder(BaseModel):
 
 class ServiceOrderItem(BaseModel):
     order = models.ForeignKey(ServiceOrder, on_delete=models.CASCADE, related_name='items')
-    service = models.ForeignKey(Service, on_delete=models.PROTECT)
+    service = models.ForeignKey(Service, on_delete=models.PROTECT, null=True, blank=True)
+    description = models.CharField(max_length=255, blank=True, default='')
     quantity = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     subtotal = models.DecimalField(max_digits=14, decimal_places=2)

@@ -10,7 +10,7 @@ import {
   fetchBookingHistory,
   fetchBookingServiceOrders,
 } from '../../api/bookings'
-import { fetchPayments, createPayment, createInvoice } from '../../api/payments'
+import { fetchPayments, createPayment } from '../../api/payments'
 import { createServiceOrder, fetchServices } from '../../api/services'
 import { Header } from '../../components/layout/Header'
 import { Alert } from '../../components/ui/Alert'
@@ -24,7 +24,7 @@ import { StatusBadge } from '../../components/ui/StatusBadge'
 import { Tabs } from '../../components/ui/Tabs'
 import { getErrorMessage } from '../../hooks/useAsync'
 import { formatDate, formatDateTime, formatMoney } from '../../utils/format'
-import { BOOKING_STATUS, PAYMENT_METHOD, PAYMENT_STATUS, SERVICE_ORDER_STATUS } from '../../utils/status'
+import { BOOKING_PAYMENT_STATUS, BOOKING_STATUS, PAYMENT_METHOD, PAYMENT_STATUS, SERVICE_ORDER_STATUS } from '../../utils/status'
 import { hasRole } from '../../utils/roles'
 import { useAuth } from '../../contexts/AuthContext'
 
@@ -52,10 +52,18 @@ export function BookingDetailPage() {
   const [actionError, setActionError] = useState('')
   const [tab, setTab] = useState('overview')
   const [paymentOpen, setPaymentOpen] = useState(false)
+  const [paymentLoading, setPaymentLoading] = useState(false)
   const [serviceOpen, setServiceOpen] = useState(false)
   const [services, setServices] = useState([])
   const [paymentForm, setPaymentForm] = useState({ amount: '', method: 'cash' })
-  const [serviceForm, setServiceForm] = useState({ service_id: '', quantity: 1 })
+  const [serviceMode, setServiceMode] = useState('catalog')
+  const [serviceForm, setServiceForm] = useState({
+    service_id: '',
+    quantity: 1,
+    description: '',
+    unit_price: '',
+  })
+  const isStaff = hasRole(user, ['manager', 'receptionist'])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -71,7 +79,8 @@ export function BookingDetailPage() {
       setPayments(p.items || p)
       setOrders(Array.isArray(o) ? o : [])
       setHistory(Array.isArray(h) ? h : [])
-      setPaymentForm((prev) => ({ ...prev, amount: String(b.total_amount || '') }))
+      const remaining = b.remaining_balance ?? Math.max(Number(b.actual_total_amount || b.total_amount || 0) - Number(b.paid_amount || 0), 0)
+      setPaymentForm((prev) => ({ ...prev, amount: String(remaining || b.total_amount || '') }))
     } catch (err) {
       setError(getErrorMessage(err))
     } finally {
@@ -99,6 +108,7 @@ export function BookingDetailPage() {
   async function handlePayment(e) {
     e.preventDefault()
     setActionError('')
+    setPaymentLoading(true)
     try {
       const payment = await createPayment({
         booking_id: id,
@@ -113,6 +123,8 @@ export function BookingDetailPage() {
       await load()
     } catch (err) {
       setActionError(getErrorMessage(err))
+    } finally {
+      setPaymentLoading(false)
     }
   }
 
@@ -120,9 +132,19 @@ export function BookingDetailPage() {
     e.preventDefault()
     setActionError('')
     try {
+      let item
+      if (serviceMode === 'manual') {
+        item = {
+          description: serviceForm.description.trim(),
+          unit_price: serviceForm.unit_price,
+          quantity: Number(serviceForm.quantity),
+        }
+      } else {
+        item = { service_id: serviceForm.service_id, quantity: Number(serviceForm.quantity) }
+      }
       await createServiceOrder({
         booking_id: id,
-        items: [{ service_id: serviceForm.service_id, quantity: Number(serviceForm.quantity) }],
+        items: [item],
       })
       setServiceOpen(false)
       await load()
@@ -131,21 +153,13 @@ export function BookingDetailPage() {
     }
   }
 
-  async function handleInvoice() {
-    setActionError('')
-    try {
-      await createInvoice(id)
-      await load()
-    } catch (err) {
-      setActionError(getErrorMessage(err))
-    }
-  }
-
   useEffect(() => {
     if (serviceOpen) {
-      fetchServices({ is_active: true }).then(setServices).catch(() => {})
+      const params = { is_active: true }
+      if (isStaff) params.include_staff_only = true
+      fetchServices(params).then(setServices).catch(() => {})
     }
-  }, [serviceOpen])
+  }, [serviceOpen, isStaff])
 
   if (loading) {
     return (
@@ -229,7 +243,12 @@ export function BookingDetailPage() {
                 Hủy booking
               </Button>
             )}
-            <Button variant="secondary" onClick={() => setPaymentOpen(true)}>
+            <Button 
+              variant="secondary" 
+              onClick={() => setPaymentOpen(true)}
+              disabled={booking.status !== 'checked_out'}
+              title={booking.status !== 'checked_out' ? 'Chỉ có thể thanh toán sau khi check-out' : 'Tạo thanh toán'}
+            >
               <CreditCard style={{ width: '14px', height: '14px' }} />
               Thanh toán
             </Button>
@@ -237,12 +256,6 @@ export function BookingDetailPage() {
               <Plus style={{ width: '14px', height: '14px' }} />
               Thêm dịch vụ
             </Button>
-            {hasRole(user, ['manager', 'receptionist']) && (
-              <Button variant="secondary" onClick={handleInvoice}>
-                <FileText style={{ width: '14px', height: '14px' }} />
-                Tạo hóa đơn
-              </Button>
-            )}
           </div>
         </div>
 
@@ -258,7 +271,13 @@ export function BookingDetailPage() {
                 <InfoRow label="Email" value={booking.customer?.email} />
                 <InfoRow label="Số đêm" value={booking.nights} />
                 <InfoRow label="Người lớn / Trẻ em" value={`${booking.adults} / ${booking.children}`} />
-                <InfoRow label="Tổng tiền" value={formatMoney(booking.total_amount)} bold />
+                <InfoRow label="Tổng tiền" value={formatMoney(booking.actual_total_amount ?? booking.total_amount)} bold />
+                <InfoRow label="Đã thanh toán" value={formatMoney(booking.paid_amount || 0)} />
+                <InfoRow label="Còn nợ" value={formatMoney(booking.remaining_balance ?? 0)} bold />
+                <div className="flex items-center justify-between py-2.5">
+                  <span className="text-sm text-slate-500">Trạng thái thanh toán</span>
+                  <StatusBadge map={BOOKING_PAYMENT_STATUS} value={booking.payment_status || 'unpaid'} dot />
+                </div>
               </div>
             </Card>
             <Card title="Phòng đã đặt">
@@ -374,26 +393,70 @@ export function BookingDetailPage() {
 
       <Modal open={paymentOpen} onClose={() => setPaymentOpen(false)} title="Tạo thanh toán">
         <form className="space-y-4" onSubmit={handlePayment}>
-          <Input label="Số tiền" value={paymentForm.amount} onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })} required />
-          <Select label="Phương thức" value={paymentForm.method} onChange={(e) => setPaymentForm({ ...paymentForm, method: e.target.value })}>
+          <Input label="Số tiền" value={paymentForm.amount} onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })} required disabled={paymentLoading} />
+          <Select label="Phương thức" value={paymentForm.method} onChange={(e) => setPaymentForm({ ...paymentForm, method: e.target.value })} disabled={paymentLoading}>
             <option value="cash">Tiền mặt</option>
             <option value="vnpay">VNPay</option>
           </Select>
           <div className="flex justify-end gap-3 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setPaymentOpen(false)}>Hủy</Button>
-            <Button type="submit">Xác nhận thanh toán</Button>
+            <Button type="button" variant="secondary" onClick={() => setPaymentOpen(false)} disabled={paymentLoading}>Hủy</Button>
+            <Button type="submit" disabled={paymentLoading}>{paymentLoading ? 'Đang xử lý...' : 'Xác nhận thanh toán'}</Button>
           </div>
         </form>
       </Modal>
 
       <Modal open={serviceOpen} onClose={() => setServiceOpen(false)} title="Thêm dịch vụ">
         <form className="space-y-4" onSubmit={handleServiceOrder}>
-          <Select label="Dịch vụ" value={serviceForm.service_id} onChange={(e) => setServiceForm({ ...serviceForm, service_id: e.target.value })} required>
-            <option value="">Chọn dịch vụ</option>
-            {services.map((s) => (
-              <option key={s.id} value={s.id}>{s.name} — {formatMoney(s.price)}</option>
-            ))}
-          </Select>
+          {isStaff && (
+            <div className="flex gap-2 rounded-lg bg-slate-100 p-1">
+              <button
+                type="button"
+                className={`flex-1 rounded-md px-3 py-1.5 text-sm ${serviceMode === 'catalog' ? 'bg-white font-medium shadow-sm' : 'text-slate-600'}`}
+                onClick={() => setServiceMode('catalog')}
+              >
+                Chọn từ danh mục
+              </button>
+              <button
+                type="button"
+                className={`flex-1 rounded-md px-3 py-1.5 text-sm ${serviceMode === 'manual' ? 'bg-white font-medium shadow-sm' : 'text-slate-600'}`}
+                onClick={() => setServiceMode('manual')}
+              >
+                Nhập thủ công
+              </button>
+            </div>
+          )}
+          {serviceMode === 'manual' && isStaff ? (
+            <>
+              <Input
+                label="Mô tả (tiền cọc, minibar, hư hỏng…)"
+                value={serviceForm.description}
+                onChange={(e) => setServiceForm({ ...serviceForm, description: e.target.value })}
+                required
+              />
+              <Input
+                label="Đơn giá (VND)"
+                type="number"
+                min="0"
+                value={serviceForm.unit_price}
+                onChange={(e) => setServiceForm({ ...serviceForm, unit_price: e.target.value })}
+                required
+              />
+            </>
+          ) : (
+            <Select
+              label="Dịch vụ"
+              value={serviceForm.service_id}
+              onChange={(e) => setServiceForm({ ...serviceForm, service_id: e.target.value })}
+              required
+            >
+              <option value="">Chọn dịch vụ</option>
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.is_staff_only ? ' (nội bộ)' : ''} — {formatMoney(s.price)}
+                </option>
+              ))}
+            </Select>
+          )}
           <Input label="Số lượng" type="number" min="1" value={serviceForm.quantity} onChange={(e) => setServiceForm({ ...serviceForm, quantity: e.target.value })} />
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="secondary" onClick={() => setServiceOpen(false)}>Hủy</Button>

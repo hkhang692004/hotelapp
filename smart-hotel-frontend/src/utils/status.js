@@ -14,6 +14,12 @@ export const ROOM_STATUS = {
   maintenance: { label: 'Bảo trì', tone: 'danger' },
 }
 
+export const BOOKING_PAYMENT_STATUS = {
+  unpaid: { label: 'Chưa thanh toán', tone: 'warning' },
+  partial: { label: 'Thanh toán một phần', tone: 'info' },
+  paid: { label: 'Đã thanh toán', tone: 'success' },
+}
+
 export const PAYMENT_STATUS = {
   pending: { label: 'Chờ thanh toán', tone: 'warning' },
   completed: { label: 'Hoàn tất', tone: 'success' },

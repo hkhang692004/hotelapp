@@ -45,7 +45,7 @@ class BookingService:
             Room.objects.select_for_update().filter(
                 room_type_id=room_type_id,
                 is_active=True,
-                status__in=[RoomStatus.AVAILABLE, RoomStatus.RESERVED],
+                status__in=[RoomStatus.AVAILABLE, RoomStatus.RESERVED, RoomStatus.CLEANING],
             ).exclude(pk__in=busy).order_by('room_number')[:quantity]
         )
         if len(rooms) < quantity:
@@ -115,10 +115,25 @@ class BookingService:
 
     @staticmethod
     @transaction.atomic
-    def create_walk_in(staff, customer_id, check_in, check_out, adults, children, room_ids, special_request='', status=None):
-        customer = User.objects.filter(pk=customer_id, role=UserRole.CUSTOMER, is_active=True).first()
-        if not customer:
-            raise BusinessException('Khách hàng không tồn tại', code='NOT_FOUND', status_code=404)
+    def create_walk_in(
+        staff,
+        check_in,
+        check_out,
+        adults,
+        children,
+        room_ids,
+        customer_id=None,
+        guest_data=None,
+        special_request='',
+        status=None,
+    ):
+        if guest_data:
+            from apps.accounts.services.guest_service import GuestService
+            customer = GuestService.create_walk_in_guest(**guest_data)
+        else:
+            customer = User.objects.filter(pk=customer_id, role=UserRole.CUSTOMER, is_active=True).first()
+            if not customer:
+                raise BusinessException('Khách hàng không tồn tại', code='NOT_FOUND', status_code=404)
 
         nights = BookingService._nights(check_in, check_out)
         if nights < 1:
@@ -221,6 +236,34 @@ class BookingService:
             return booking
 
         BookingService._log_status(booking, old, new_status, user, note)
+        return booking
+
+    @staticmethod
+    @transaction.atomic
+    def recalculate_total_amount(booking):
+        """
+        Tính lại tổng tiền booking từ tất cả thành phần:
+        - Tất cả BookingRoom (tiền phòng)
+        - Tất cả ServiceOrder có status = CONFIRMED (dịch vụ đã xác nhận)
+        
+        Hàm này đảm bảo tổng tiền luôn chính xác và nhất quán,
+        dù dịch vụ được thêm trước hay sau checkout.
+        """
+        # Tính tổng tiền phòng từ BookingRoom
+        room_total = Decimal('0')
+        for br in booking.booking_rooms.all():
+            room_total += br.subtotal
+        
+        # Tính tổng dịch vụ đã xác nhận (CONFIRMED)
+        from apps.services.models import ServiceOrderStatus
+        service_total = Decimal('0')
+        for order in booking.service_orders.filter(status=ServiceOrderStatus.CONFIRMED):
+            service_total += order.total_amount
+        
+        # Cập nhật tổng tiền booking
+        total = room_total + service_total
+        booking.total_amount = total
+        booking.save(update_fields=['total_amount', 'updated_at'])
         return booking
 
     @staticmethod

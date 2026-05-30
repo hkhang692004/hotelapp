@@ -30,6 +30,13 @@ BOOKING_LIST_PARAMS = [
     PARAM_PAGE_SIZE,
     PARAM_SEARCH,
     OpenApiParameter(name='status', type=str, location=OpenApiParameter.QUERY, required=False),
+    OpenApiParameter(
+        name='status__in',
+        type=str,
+        location=OpenApiParameter.QUERY,
+        required=False,
+        description='Lọc nhiều trạng thái, phân tách bằng dấu phẩy (VD: pending,confirmed,checked_in)',
+    ),
     OpenApiParameter(name='check_in_date', type=str, location=OpenApiParameter.QUERY, required=False),
     OpenApiParameter(name='customer_id', type=str, location=OpenApiParameter.QUERY, required=False),
 ]
@@ -69,10 +76,15 @@ class BookingListCreateView(APIView):
 
     def get(self, request):
         qs = BookingService.get_queryset_for_user(request.user)
-        status_param = request.query_params.get('status')
-        if status_param:
-            statuses = [s.strip() for s in status_param.split(',') if s.strip()]
-            qs = qs.filter(status__in=statuses)
+        status_in = request.query_params.get('status__in')
+        if status_in:
+            statuses = [s.strip() for s in status_in.split(',') if s.strip()]
+            if statuses:
+                qs = qs.filter(status__in=statuses)
+        else:
+            status_param = request.query_params.get('status')
+            if status_param:
+                qs = qs.filter(status=status_param)
         check_in = request.query_params.get('check_in_date')
         if check_in:
             qs = qs.filter(check_in_date=check_in)
@@ -148,7 +160,8 @@ class BookingWalkInView(APIView):
         data = serializer.validated_data
         booking = BookingService.create_walk_in(
             staff=request.user,
-            customer_id=data['customer_id'],
+            customer_id=data.get('customer_id'),
+            guest_data=data.get('guest'),
             check_in=data['check_in_date'],
             check_out=data['check_out_date'],
             adults=data['adults'],

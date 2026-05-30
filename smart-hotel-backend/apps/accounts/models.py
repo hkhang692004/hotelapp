@@ -46,6 +46,25 @@ class StaffProfile(models.Model):
         db_table = 'accounts_staff_profile'
 
 
+class GuestProfile(models.Model):
+    """Hồ sơ khách walk-in — không bắt buộc đăng ký tài khoản."""
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name='guest_profile',
+    )
+    national_id = models.CharField(max_length=50, blank=True, default='', db_index=True)
+    address = models.TextField(blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+    is_temporary = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'accounts_guest_profile'
+
+
+
 class PasswordResetToken(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reset_tokens')

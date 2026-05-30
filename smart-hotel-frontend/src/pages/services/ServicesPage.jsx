@@ -5,6 +5,7 @@ import {
   cancelServiceOrder,
   confirmServiceOrder,
   createService,
+  createServiceCategory,
   createServiceOrder,
   deleteService,
   fetchServiceCategories,
@@ -43,6 +44,8 @@ export function ServicesPage() {
   const [meta, setMeta] = useState({})
   const [orderOpen, setOrderOpen] = useState(false)
   const [serviceModal, setServiceModal] = useState(null)
+  const [categoryModal, setCategoryModal] = useState(false)
+  const [categoryName, setCategoryName] = useState('')
   const [orderForm, setOrderForm] = useState({ booking_id: '', service_id: '', quantity: 1, note: '' })
 
   const load = useCallback(async () => {
@@ -55,7 +58,7 @@ export function ServicesPage() {
         setMeta(result.meta)
       } else {
         const [svc, cats] = await Promise.all([
-          fetchServices({ is_active: '' }),
+          fetchServices({ is_active: '', include_staff_only: isManager ? true : undefined }),
           fetchServiceCategories(),
         ])
         setServices(Array.isArray(svc) ? svc : [])
@@ -101,6 +104,19 @@ export function ServicesPage() {
     }
   }
 
+  async function saveCategory(e) {
+    e.preventDefault()
+    setError('')
+    try {
+      await createServiceCategory({ name: categoryName.trim() })
+      setCategoryModal(false)
+      setCategoryName('')
+      load()
+    } catch (err) {
+      setError(getErrorMessage(err))
+    }
+  }
+
   async function saveService(e) {
     e.preventDefault()
     const form = new FormData(e.target)
@@ -111,6 +127,7 @@ export function ServicesPage() {
       price: form.get('price'),
       unit: form.get('unit') || 'per_person',
       is_active: form.get('is_active') === 'true',
+      is_staff_only: form.get('is_staff_only') === 'true',
     }
     try {
       if (serviceModal?.id) await updateService(serviceModal.id, payload)
@@ -155,6 +172,7 @@ export function ServicesPage() {
     { key: 'name', label: 'Tên dịch vụ' },
     { key: 'category', label: 'Danh mục', render: (r) => r.category?.name },
     { key: 'price', label: 'Giá', render: (r) => formatMoney(r.price) },
+    { key: 'is_staff_only', label: 'Nội bộ', render: (r) => (r.is_staff_only ? 'Có' : '—') },
     { key: 'is_active', label: 'Hoạt động', render: (r) => (r.is_active ? 'Có' : 'Không') },
     ...(isManager ? [{
       key: 'actions',
@@ -186,10 +204,16 @@ export function ServicesPage() {
               Tạo đơn
             </Button>
           ) : isManager ? (
-            <Button onClick={() => setServiceModal({})}>
-              <Plus className="h-4 w-4" />
-              Thêm dịch vụ
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setCategoryModal(true)}>
+                <Plus className="h-4 w-4" />
+                Thêm danh mục
+              </Button>
+              <Button onClick={() => setServiceModal({})}>
+                <Plus className="h-4 w-4" />
+                Thêm dịch vụ
+              </Button>
+            </div>
           ) : null}
         </div>
 
@@ -201,7 +225,21 @@ export function ServicesPage() {
             <Pagination page={page} totalPages={meta.total_pages} onPageChange={setPage} />
           </>
         ) : (
-          <DataTable columns={serviceColumns} rows={services} loading={loading} />
+          <>
+            {categories.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {categories.map((c) => (
+                  <span
+                    key={c.id}
+                    className="rounded-full border border-slate-200 bg-white px-3 py-1 text-sm text-slate-700"
+                  >
+                    {c.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            <DataTable columns={serviceColumns} rows={services} loading={loading} />
+          </>
         )}
       </div>
 
@@ -228,6 +266,25 @@ export function ServicesPage() {
         </form>
       </Modal>
 
+      <Modal open={categoryModal} onClose={() => setCategoryModal(false)} title="Thêm danh mục dịch vụ">
+        <form className="space-y-4" onSubmit={saveCategory}>
+          <Input
+            label="Tên danh mục"
+            value={categoryName}
+            onChange={(e) => setCategoryName(e.target.value)}
+            placeholder="VD: Giặt là, Tour, Sự kiện…"
+            required
+          />
+          <p className="text-xs text-slate-500">
+            Sau khi tạo, chọn danh mục này khi thêm dịch vụ mới.
+          </p>
+          <div className="flex justify-end gap-3">
+            <Button type="button" variant="secondary" onClick={() => setCategoryModal(false)}>Hủy</Button>
+            <Button type="submit">Lưu danh mục</Button>
+          </div>
+        </form>
+      </Modal>
+
       <Modal open={Boolean(serviceModal)} onClose={() => setServiceModal(null)} title={serviceModal?.id ? 'Sửa dịch vụ' : 'Thêm dịch vụ'}>
         <form className="space-y-4" onSubmit={saveService}>
           <Select name="category_id" label="Danh mục" defaultValue={serviceModal?.category?.id} required>
@@ -237,7 +294,17 @@ export function ServicesPage() {
           <Input name="name" label="Tên" defaultValue={serviceModal?.name} required />
           <Textarea name="description" label="Mô tả" defaultValue={serviceModal?.description} />
           <Input name="price" label="Giá" defaultValue={serviceModal?.price} required />
-          <Input name="unit" label="Đơn vị" defaultValue={serviceModal?.unit || 'per_person'} />
+          <Select name="unit" label="Đơn vị tính" defaultValue={serviceModal?.unit || 'per_person'}>
+            <option value="per_person">Theo người</option>
+            <option value="per_trip">Theo chuyến</option>
+            <option value="per_booking">Theo booking</option>
+            <option value="per_item">Theo mục</option>
+            <option value="per_night">Theo đêm</option>
+          </Select>
+          <Select name="is_staff_only" label="Chỉ nhân viên (khách không thấy)" defaultValue={String(serviceModal?.is_staff_only ?? false)}>
+            <option value="false">Không</option>
+            <option value="true">Có (cọc, minibar, hư hỏng…)</option>
+          </Select>
           <Select name="is_active" label="Hoạt động" defaultValue={String(serviceModal?.is_active ?? true)}>
             <option value="true">Có</option>
             <option value="false">Không</option>

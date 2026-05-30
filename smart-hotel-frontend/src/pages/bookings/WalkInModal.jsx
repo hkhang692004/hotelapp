@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { createWalkIn } from '../../api/bookings'
-import { fetchCustomers } from '../../api/customers'
 import { fetchRooms } from '../../api/rooms'
 import { Alert } from '../../components/ui/Alert'
 import { Button } from '../../components/ui/Button'
@@ -12,36 +11,46 @@ import { Textarea } from '../../components/ui/Textarea'
 import { getErrorMessage } from '../../hooks/useAsync'
 import { addDaysISO, todayISO } from '../../utils/format'
 
+const initialForm = () => ({
+  guest: {
+    full_name: '',
+    national_id: '',
+    phone: '',
+    email: '',
+    address: '',
+    notes: '',
+  },
+  check_in_date: todayISO(),
+  check_out_date: addDaysISO(todayISO(), 1),
+  adults: 1,
+  children: 0,
+  room_ids: [],
+  special_request: '',
+  status: 'confirmed',
+})
+
 export function WalkInModal({ open, onClose, onSuccess }) {
-  const [customers, setCustomers] = useState([])
   const [rooms, setRooms] = useState([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [form, setForm] = useState({
-    customer_id: '',
-    check_in_date: todayISO(),
-    check_out_date: addDaysISO(todayISO(), 1),
-    adults: 1,
-    children: 0,
-    room_ids: [],
-    special_request: '',
-    status: 'confirmed',
-  })
+  const [form, setForm] = useState(initialForm)
 
   useEffect(() => {
     if (!open) return
+    setForm(initialForm())
     setLoading(true)
-    Promise.all([
-      fetchCustomers({ page_size: 100 }),
-      fetchRooms({ status: 'available', page_size: 100 }),
-    ])
-      .then(([customerRes, roomRes]) => {
-        setCustomers(customerRes.items)
-        setRooms(roomRes.items)
-      })
+    fetchRooms({ status: 'available', page_size: 100 })
+      .then((roomRes) => setRooms(roomRes.items))
       .finally(() => setLoading(false))
   }, [open])
+
+  function updateGuest(field, value) {
+    setForm((prev) => ({
+      ...prev,
+      guest: { ...prev.guest, [field]: value },
+    }))
+  }
 
   function toggleRoom(id) {
     setForm((prev) => ({
@@ -54,14 +63,35 @@ export function WalkInModal({ open, onClose, onSuccess }) {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (!form.customer_id || !form.room_ids.length) {
-      setError('Chọn khách hàng và ít nhất một phòng')
+    const { guest, room_ids } = form
+    if (!guest.full_name.trim() || !guest.national_id.trim()) {
+      setError('Nhập họ tên và CCCD/Passport')
+      return
+    }
+    if (!room_ids.length) {
+      setError('Chọn ít nhất một phòng')
       return
     }
     setSubmitting(true)
     setError('')
     try {
-      const booking = await createWalkIn(form)
+      const booking = await createWalkIn({
+        guest: {
+          full_name: guest.full_name.trim(),
+          national_id: guest.national_id.trim(),
+          phone: guest.phone.trim(),
+          email: guest.email.trim(),
+          address: guest.address.trim(),
+          notes: guest.notes.trim(),
+        },
+        check_in_date: form.check_in_date,
+        check_out_date: form.check_out_date,
+        adults: form.adults,
+        children: form.children,
+        room_ids: form.room_ids,
+        special_request: form.special_request,
+        status: form.status,
+      })
       onSuccess(booking)
     } catch (err) {
       setError(getErrorMessage(err))
@@ -78,17 +108,41 @@ export function WalkInModal({ open, onClose, onSuccess }) {
         </div>
       ) : (
         <form className="space-y-4" onSubmit={handleSubmit}>
-          <Select
-            label="Khách hàng"
-            value={form.customer_id}
-            onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
-            required
-          >
-            <option value="">Chọn khách</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>{c.full_name} — {c.email}</option>
-            ))}
-          </Select>
+          <p className="text-sm text-slate-500">
+            Nhập thông tin khách — hệ thống tự tạo hồ sơ khách, không cần đăng ký tài khoản.
+          </p>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <Input
+              label="Họ và tên"
+              value={form.guest.full_name}
+              onChange={(e) => updateGuest('full_name', e.target.value)}
+              required
+            />
+            <Input
+              label="CCCD / Passport"
+              value={form.guest.national_id}
+              onChange={(e) => updateGuest('national_id', e.target.value)}
+              required
+            />
+            <Input
+              label="Số điện thoại"
+              value={form.guest.phone}
+              onChange={(e) => updateGuest('phone', e.target.value)}
+            />
+            <Input
+              label="Email (không bắt buộc)"
+              type="email"
+              value={form.guest.email}
+              onChange={(e) => updateGuest('email', e.target.value)}
+            />
+          </div>
+
+          <Textarea
+            label="Địa chỉ / Ghi chú (không bắt buộc)"
+            value={form.guest.address}
+            onChange={(e) => updateGuest('address', e.target.value)}
+          />
 
           <div className="grid gap-4 md:grid-cols-2">
             <Input

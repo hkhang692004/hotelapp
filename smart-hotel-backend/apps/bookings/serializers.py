@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from decimal import Decimal
 
 from apps.accounts.serializers.user import UserSerializer
 from apps.bookings.models import Booking, BookingRoom, BookingStatus, BookingStatusHistory
@@ -20,30 +21,65 @@ class BookingRoomSerializer(serializers.ModelSerializer):
 class BookingListSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.full_name', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
+    remaining_balance = serializers.SerializerMethodField()
+    actual_total_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
         fields = (
             'id', 'booking_code', 'status', 'customer_name', 'customer_email',
-            'check_in_date', 'check_out_date', 'total_amount', 'created_at',
+            'check_in_date', 'check_out_date', 'total_amount', 'actual_total_amount', 'paid_amount',
+            'payment_status', 'remaining_balance', 'created_at',
         )
 
+    def get_remaining_balance(self, obj):
+        return max(self._get_actual_total(obj) - obj.paid_amount, 0)
+    
+    def get_actual_total_amount(self, obj):
+        return self._get_actual_total(obj)
+    
+    @staticmethod
+    def _get_actual_total(obj):
+        # booking.total_amount đã chứa tiền phòng + tất cả dịch vụ CONFIRMED
+        # Chỉ cộng thêm những dịch vụ PENDING chưa được xác nhận
+        service_total = Decimal('0')
+        for order in obj.service_orders.filter(status='pending'):
+            service_total += order.total_amount
+        return obj.total_amount + service_total
 
 class BookingDetailSerializer(serializers.ModelSerializer):
     customer = UserSerializer(read_only=True)
     rooms = BookingRoomSerializer(source='booking_rooms', many=True, read_only=True)
     nights = serializers.SerializerMethodField()
+    remaining_balance = serializers.SerializerMethodField()
+    actual_total_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
         fields = (
             'id', 'booking_code', 'status', 'customer', 'check_in_date', 'check_out_date',
-            'adults', 'children', 'nights', 'rooms', 'total_amount', 'special_request',
+            'adults', 'children', 'nights', 'rooms', 'total_amount', 'actual_total_amount', 'paid_amount',
+            'payment_status', 'remaining_balance', 'special_request',
             'checked_in_at', 'checked_out_at', 'cancelled_at', 'cancel_reason', 'created_at',
         )
 
     def get_nights(self, obj):
         return (obj.check_out_date - obj.check_in_date).days
+
+    def get_remaining_balance(self, obj):
+        return max(self._get_actual_total(obj) - obj.paid_amount, 0)
+    
+    def get_actual_total_amount(self, obj):
+        return self._get_actual_total(obj)
+    
+    @staticmethod
+    def _get_actual_total(obj):
+        # booking.total_amount đã chứa tiền phòng + tất cả dịch vụ CONFIRMED
+        # Chỉ cộng thêm những dịch vụ PENDING chưa được xác nhận
+        service_total = Decimal('0')
+        for order in obj.service_orders.filter(status='pending'):
+            service_total += order.total_amount
+        return obj.total_amount + service_total
 
 
 class BookingCreateSerializer(serializers.Serializer):
@@ -63,9 +99,18 @@ class BookingCreateSerializer(serializers.Serializer):
     )
     special_request = serializers.CharField(required=False, allow_blank=True, default='')
 
+class WalkInGuestSerializer(serializers.Serializer):
+    full_name = serializers.CharField(max_length=255)
+    national_id = serializers.CharField(max_length=50)
+    phone = serializers.CharField(required=False, allow_blank=True, default='')
+    email = serializers.EmailField(required=False, allow_blank=True, default='')
+    address = serializers.CharField(required=False, allow_blank=True, default='')
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+
 
 class BookingWalkInSerializer(serializers.Serializer):
-    customer_id = serializers.UUIDField()
+    customer_id = serializers.UUIDField(required=False, allow_null=True)
+    guest = WalkInGuestSerializer(required=False)
     check_in_date = serializers.DateField()
     check_out_date = serializers.DateField()
     adults = serializers.IntegerField(default=1, min_value=1)
@@ -76,6 +121,15 @@ class BookingWalkInSerializer(serializers.Serializer):
         choices=[BookingStatus.CONFIRMED, BookingStatus.PENDING],
         required=False,
     )
+
+    def validate(self, data):
+        customer_id = data.get('customer_id')
+        guest = data.get('guest')
+        if customer_id and guest:
+            raise serializers.ValidationError('Chỉ dùng customer_id hoặc thông tin khách walk-in')
+        if not customer_id and not guest:
+            raise serializers.ValidationError('Cần customer_id hoặc thông tin khách walk-in')
+        return data
 
 
 class BookingCancelSerializer(serializers.Serializer):

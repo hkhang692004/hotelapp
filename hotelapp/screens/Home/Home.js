@@ -181,8 +181,8 @@ export default function Home() {
             const res = await authApis(user?.token).get(endpoints.bookings, {
                 params: {
                     ordering: "check_in_date",
-                    page_size: 1,
-                    status: "pending,confirmed",
+                    page_size: 10,
+                    status__in: "pending,confirmed",
                     check_in_date_gte: todayStr,
                 },
             });

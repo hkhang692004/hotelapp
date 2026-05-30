@@ -12,6 +12,12 @@ class BookingStatus(models.TextChoices):
     CANCELLED = 'cancelled', 'Cancelled'
 
 
+class BookingPaymentStatus(models.TextChoices):
+    UNPAID = 'unpaid', 'Unpaid'
+    PARTIAL = 'partial', 'Partial'
+    PAID = 'paid', 'Paid'
+
+
 class Booking(BaseModel):
     booking_code = models.CharField(max_length=30, unique=True)
     customer = models.ForeignKey(
@@ -25,6 +31,12 @@ class Booking(BaseModel):
     adults = models.PositiveIntegerField(default=1)
     children = models.PositiveIntegerField(default=0)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    paid_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    payment_status = models.CharField(
+        max_length=20,
+        choices=BookingPaymentStatus.choices,
+        default=BookingPaymentStatus.UNPAID,
+    )
     special_request = models.TextField(blank=True, default='')
     checked_in_at = models.DateTimeField(null=True, blank=True)
     checked_out_at = models.DateTimeField(null=True, blank=True)

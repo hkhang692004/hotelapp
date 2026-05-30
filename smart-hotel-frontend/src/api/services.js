@@ -28,6 +28,11 @@ export async function fetchServiceCategories() {
   return unwrap(response)
 }
 
+export async function createServiceCategory(payload) {
+  const response = await api.post('/service-categories/', payload)
+  return unwrap(response)
+}
+
 export async function fetchServiceOrders(params) {
   const response = await api.get('/service-orders/', { params: buildParams(params) })
   return unwrapList(response)

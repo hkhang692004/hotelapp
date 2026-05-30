@@ -1,7 +1,7 @@
 from django.urls import path
 
 from apps.services.views.v1 import (
-    ServiceCategoryListView,
+    ServiceCategoryListCreateView,
     ServiceDetailView,
     ServiceListCreateView,
     ServiceOrderCancelView,
@@ -13,7 +13,7 @@ from apps.services.views.v1 import (
 from apps.services.views.v1 import BookingServiceOrdersView
 
 urlpatterns = [
-    path('service-categories/', ServiceCategoryListView.as_view(), name='service-category-list'),
+    path('service-categories/', ServiceCategoryListCreateView.as_view(), name='service-category-list'),
     path('services/', ServiceListCreateView.as_view(), name='service-list'),
     path('services/<uuid:pk>/', ServiceDetailView.as_view(), name='service-detail'),
     path('service-orders/', ServiceOrderListCreateView.as_view(), name='service-order-list'),

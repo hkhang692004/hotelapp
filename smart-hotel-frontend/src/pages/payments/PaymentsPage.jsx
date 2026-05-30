@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus } from 'lucide-react'
-import { fetchBookings } from '../../api/bookings'
-import { createPayment, fetchInvoices, fetchPayments, refundPayment } from '../../api/payments'
+import { fetchInvoices, fetchPayments, refundPayment } from '../../api/payments'
 import { Header } from '../../components/layout/Header'
 import { Alert } from '../../components/ui/Alert'
 import { Button } from '../../components/ui/Button'
@@ -25,15 +23,12 @@ export function PaymentsPage() {
   const [tab, setTab] = useState('payments')
   const [rows, setRows] = useState([])
   const [invoices, setInvoices] = useState([])
-  const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
   const [meta, setMeta] = useState({})
   const [status, setStatus] = useState('')
-  const [createOpen, setCreateOpen] = useState(false)
   const [refundTarget, setRefundTarget] = useState(null)
-  const [form, setForm] = useState({ booking_id: '', amount: '', method: 'cash' })
   const [refundForm, setRefundForm] = useState({ amount: '', reason: '' })
 
   const load = useCallback(async () => {
@@ -59,31 +54,6 @@ export function PaymentsPage() {
   useEffect(() => {
     load()
   }, [load])
-
-  useEffect(() => {
-    if (createOpen) {
-      fetchBookings({ page_size: 100, status: 'confirmed' })
-        .then((r) => setBookings(r.items))
-        .catch(() => setBookings([]))
-    }
-  }, [createOpen])
-
-  async function handleCreate(e) {
-    e.preventDefault()
-    setError('')
-    try {
-      const payment = await createPayment(form)
-      if (form.method === 'vnpay' && payment.payment_url) {
-        window.location.href = payment.payment_url
-        return
-      }
-      setCreateOpen(false)
-      setForm({ booking_id: '', amount: '', method: 'cash' })
-      load()
-    } catch (err) {
-      setError(getErrorMessage(err))
-    }
-  }
 
   async function handleRefund(e) {
     e.preventDefault()
@@ -142,12 +112,6 @@ export function PaymentsPage() {
               ))}
             </Select>
           )}
-          {tab === 'payments' && (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4" />
-              Tạo thanh toán
-            </Button>
-          )}
         </div>
 
         {error && <Alert>{error}</Alert>}
@@ -159,28 +123,6 @@ export function PaymentsPage() {
         )}
         <Pagination page={page} totalPages={meta.total_pages} onPageChange={setPage} />
       </div>
-
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Tạo thanh toán">
-        <form className="space-y-4" onSubmit={handleCreate}>
-          <Select label="Booking" value={form.booking_id} onChange={(e) => setForm({ ...form, booking_id: e.target.value })} required>
-            <option value="">Chọn booking</option>
-            {bookings.map((b) => (
-              <option key={b.id} value={b.id}>{b.booking_code} — {b.customer_name} ({formatMoney(b.total_amount)})</option>
-            ))}
-          </Select>
-          <Input label="Số tiền" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
-          <Select label="Phương thức" value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}>
-            <option value="cash">Tiền mặt</option>
-            <option value="vnpay">VNPay</option>
-            <option value="card">Thẻ</option>
-            <option value="bank_transfer">Chuyển khoản</option>
-          </Select>
-          <div className="flex justify-end gap-3">
-            <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)}>Hủy</Button>
-            <Button type="submit">Tạo</Button>
-          </div>
-        </form>
-      </Modal>
 
       <Modal open={Boolean(refundTarget)} onClose={() => setRefundTarget(null)} title="Hoàn tiền">
         <form className="space-y-4" onSubmit={handleRefund}>

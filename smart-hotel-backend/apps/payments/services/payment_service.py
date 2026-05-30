@@ -19,7 +19,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import Image as RLImage, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
-from apps.bookings.models import Booking, BookingStatus
+from apps.bookings.models import Booking, BookingPaymentStatus, BookingStatus
 from apps.core.exceptions import BusinessException
 from apps.payments.models import Invoice, Payment, PaymentMethod, PaymentStatus, Transaction
 from apps.payments.services.vnpay_service import VNPayService
@@ -31,6 +31,27 @@ class PaymentService:
     COMPANY_PHONE = '0901 234 567'
     COMPANY_ADDRESS = '123 Ngô Gia Tự, P. 3, Q. 10, TP. Hồ Chí Minh'
     COMPANY_TAX_ID = '0312345678'
+
+    @staticmethod
+    def sync_booking_payment(booking):
+        paid = (
+            Payment.objects.filter(
+                booking_id=booking.id,
+                status=PaymentStatus.COMPLETED,
+                is_active=True,
+            ).aggregate(total=Sum('amount'))['total']
+            or Decimal('0')
+        )
+        booking.paid_amount = paid
+        if paid <= 0:
+            booking.payment_status = BookingPaymentStatus.UNPAID
+        elif paid >= booking.total_amount:
+            booking.payment_status = BookingPaymentStatus.PAID
+        else:
+            booking.payment_status = BookingPaymentStatus.PARTIAL
+        booking.save(update_fields=['paid_amount', 'payment_status', 'updated_at'])
+        return booking
+
 
     @staticmethod
     def _register_pdf_fonts():
@@ -138,17 +159,36 @@ class PaymentService:
 
         elements = [header_table, Spacer(1, 5 * mm), info_table, Spacer(1, 7 * mm)]
 
+        # Tính tiền phòng và tiền dịch vụ
+        room_total = Decimal('0')
+        service_total = Decimal('0')
+        
         table_data = [[
             Paragraph('<b>Mô tả</b>', styles['InvoiceLabel']),
             Paragraph('<b>Đêm</b>', styles['InvoiceLabel']),
             Paragraph('<b>Thành tiền</b>', styles['InvoiceLabel']),
         ]]
+        
+        # Thêm dòng phòng
         for br in booking.booking_rooms.all():
+            room_total += br.subtotal
             table_data.append([
                 Paragraph(f'{br.room_type.name} - {br.room.room_number}', styles['InvoiceText']),
                 Paragraph(str(br.nights), styles['InvoiceText']),
                 Paragraph(f'{br.subtotal:,.0f} đ', styles['InvoiceText']),
             ])
+        
+        # Thêm dòng dịch vụ
+        from apps.services.models import ServiceOrderStatus
+        for order in booking.service_orders.filter(status=ServiceOrderStatus.CONFIRMED, is_active=True):
+            service_total += order.total_amount
+            for item in order.items.filter(is_active=True):
+                table_data.append([
+                    Paragraph(f'{item.description or item.service.name}', styles['InvoiceText']),
+                    Paragraph('1', styles['InvoiceText']),
+                    Paragraph(f'{item.subtotal:,.0f} đ', styles['InvoiceText']),
+                ])
+        
         table = Table(table_data, colWidths=[95 * mm, 20 * mm, 40 * mm], repeatRows=1)
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E9ECF8')),
@@ -165,11 +205,20 @@ class PaymentService:
         elements.append(table)
         elements.append(Spacer(1, 6 * mm))
 
-        summary_table = Table([
-            [Paragraph('Tạm tính', styles['InvoiceText']), Paragraph(f'{invoice.subtotal:,.0f} đ', styles['InvoiceText'])],
+        # Xây dựng bảng tóm tắt với tiền dịch vụ
+        summary_rows = [
+            [Paragraph('Tạm tính (Phòng)', styles['InvoiceText']), Paragraph(f'{room_total:,.0f} đ', styles['InvoiceText'])],
+        ]
+        if service_total > Decimal('0'):
+            summary_rows.append(
+                [Paragraph('Tiền dịch vụ', styles['InvoiceText']), Paragraph(f'{service_total:,.0f} đ', styles['InvoiceText'])]
+            )
+        summary_rows.extend([
             [Paragraph('Chiết khấu', styles['InvoiceText']), Paragraph(f'{invoice.discount:,.0f} đ', styles['InvoiceText'])],
             [Paragraph('Tổng cộng', styles['InvoiceTotal']), Paragraph(f'{invoice.total:,.0f} đ', styles['InvoiceTotal'])],
-        ], colWidths=[110 * mm, 55 * mm])
+        ])
+        
+        summary_table = Table(summary_rows, colWidths=[110 * mm, 55 * mm])
         summary_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 2), (-1, 2), colors.HexColor('#FFF1D6')),
             ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#D9D9E5')),
@@ -251,6 +300,16 @@ class PaymentService:
                 invoice.total = expected_total
                 update_fields.append('total')
                 invoice_changed = True
+            # Cập nhật subtotal nếu booking.total_amount thay đổi (do thêm dịch vụ)
+            if invoice.subtotal != booking.total_amount:
+                invoice.subtotal = booking.total_amount
+                expected_total = (invoice.subtotal - invoice.discount).quantize(Decimal('0.01'))
+                invoice.total = expected_total
+                if 'subtotal' not in update_fields:
+                    update_fields.append('subtotal')
+                if 'total' not in update_fields:
+                    update_fields.append('total')
+                invoice_changed = True
             if update_fields:
                 update_fields.append('updated_at')
                 invoice.save(update_fields=update_fields)
@@ -275,6 +334,154 @@ class PaymentService:
         return invoice, True
 
     @staticmethod
+    def _send_payment_confirmation_email(payment_id):
+        """Gửi email xác nhận thanh toán (hóa đơn tạm tính) khi VNPay thanh toán thành công"""
+        payment = Payment.objects.select_related('booking', 'booking__customer').prefetch_related(
+            'booking__booking_rooms__room',
+            'booking__booking_rooms__room_type',
+        ).filter(pk=payment_id, is_active=True).first()
+        if not payment:
+            return
+
+        booking = payment.booking
+        customer = booking.customer
+        if not customer.email:
+            return
+
+        # Tính tiền phòng và tiền dịch vụ
+        room_total = Decimal('0')
+        service_total = Decimal('0')
+        
+        # Dòng chi tiết phòng
+        line_rows = []
+        for br in booking.booking_rooms.all():
+            room_total += br.subtotal
+            line_rows.append(
+                f'<tr>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;">{br.room_type.name} - {br.room.room_number}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">{br.nights}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{br.subtotal:,.0f} đ</td>'
+                f'</tr>'
+            )
+        
+        # Dòng chi tiết dịch vụ đã confirm
+        from apps.services.models import ServiceOrderStatus
+        for order in booking.service_orders.filter(status=ServiceOrderStatus.CONFIRMED, is_active=True):
+            service_total += order.total_amount
+            for item in order.items.filter(is_active=True):
+                line_rows.append(
+                    f'<tr>'
+                    f'<td style="padding:8px;border-bottom:1px solid #eee;">{item.description or item.service.name}</td>'
+                    f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">1</td>'
+                    f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{item.subtotal:,.0f} đ</td>'
+                    f'</tr>'
+                )
+
+        total_confirmed = room_total + service_total
+        
+        service_fee_row = ''
+        if service_total > Decimal('0'):
+            service_fee_row = f'<p style="margin:0 0 4px"><b>Tiền dịch vụ:</b> {service_total:,.0f} đ</p>'
+
+        subject = f'[Smart Hotel] Xác nhận thanh toán - {booking.booking_code}'
+        text_body = (
+            f'Xin chào {customer.full_name},\n\n'
+            f'Cảm ơn bạn đã thanh toán cho booking {booking.booking_code}.\n\n'
+            f'Smart Hotel | MST: {PaymentService.COMPANY_TAX_ID} | SĐT: {PaymentService.COMPANY_PHONE}\n'
+            f'Địa chỉ: {PaymentService.COMPANY_ADDRESS}\n\n'
+            f'---ĐƠN XÁC NHẬN THANH TOÁN (HÓA ĐƠN TẠM TÍNH)---\n'
+            f'Booking: {booking.booking_code}\n'
+            f'Nhận phòng: {booking.check_in_date}\n'
+            f'Trả phòng: {booking.check_out_date}\n'
+            f'Số tiền thanh toán: {payment.amount:,.0f} đ\n'
+            f'Phương thức: VNPay\n'
+            f'Ngày thanh toán: {payment.paid_at.strftime("%d/%m/%Y %H:%M") if payment.paid_at else ""}\n\n'
+            f'LƯU Ý: Hóa đơn này là hóa đơn tạm tính chỉ bao gồm chi phí phòng và các dịch vụ đã xác nhận.\n'
+            f'Chưa bao gồm các phí dịch vụ phát sinh trong quá trình ở (minibar, hư hỏng, dịch vụ bổ sung...).\n'
+            f'Hóa đơn cuối cùng sẽ được cập nhật sau khi checkout.\n\n'
+            f'Trân trọng,\nSmart Hotel'
+        )
+        
+        html_body = f'''
+        <div style="font-family:Arial,sans-serif;color:#222;line-height:1.6">
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
+                <img src="{PaymentService.LOGO_URL}" alt="Smart Hotel" style="width:56px;height:56px;border-radius:12px;object-fit:cover;" />
+                <div>
+                    <h2 style="margin:0 0 4px">Smart Hotel</h2>
+                    <div style="font-size:12px;color:#666;">Xác nhận thanh toán</div>
+                </div>
+            </div>
+            <p>Xin chào <b>{customer.full_name}</b>,</p>
+            <p>Cảm ơn bạn đã thanh toán cho booking <b>{booking.booking_code}</b>. Đây là đơn xác nhận thanh toán của chúng tôi.</p>
+            <p style="margin:0 0 12px;font-size:13px;color:#555;">
+                Địa chỉ: {PaymentService.COMPANY_ADDRESS}<br/>
+                Điện thoại: {PaymentService.COMPANY_PHONE}<br/>
+                MST: {PaymentService.COMPANY_TAX_ID}
+            </p>
+            
+            <div style="background:#f7f7fb;border:1px solid #e7e7ef;border-radius:12px;padding:16px;margin:16px 0;">
+                <h3 style="margin:0 0 12px;color:#1a1a2e;">THÔNG TIN THANH TOÁN</h3>
+                <p style="margin:0 0 6px"><b>Booking:</b> {booking.booking_code}</p>
+                <p style="margin:0 0 6px"><b>Nhận phòng:</b> {booking.check_in_date}</p>
+                <p style="margin:0 0 6px"><b>Trả phòng:</b> {booking.check_out_date}</p>
+                <p style="margin:0 0 6px"><b>Số tiền thanh toán:</b> {payment.amount:,.0f} đ</p>
+                <p style="margin:0 0 6px"><b>Phương thức:</b> VNPay</p>
+                <p style="margin:0 0 6px"><b>Ngày thanh toán:</b> {payment.paid_at.strftime("%d/%m/%Y %H:%M") if payment.paid_at else ""}</p>
+            </div>
+
+            <h3 style="margin:16px 0 8px;color:#1a1a2e;">CHI TIẾT HÓA ĐƠN TẠM TÍNH</h3>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+                <thead>
+                    <tr>
+                        <th style="text-align:left;padding:8px;border-bottom:2px solid #ddd;">Mô tả</th>
+                        <th style="text-align:center;padding:8px;border-bottom:2px solid #ddd;">Đêm/SL</th>
+                        <th style="text-align:right;padding:8px;border-bottom:2px solid #ddd;">Thành tiền</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(line_rows)}
+                </tbody>
+            </table>
+
+            <div style="background:#fffaf0;border-left:4px solid #ff9800;padding:12px;margin:16px 0;">
+                <p style="margin:0 0 4px"><b>Tạm tính (Phòng):</b> {room_total:,.0f} đ</p>
+                {service_fee_row}
+                <p style="margin:0 0 0"><b>Tổng tiền hóa đơn tạm tính:</b> {total_confirmed:,.0f} đ</p>
+            </div>
+
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:14px;margin:16px 0;color:#856404;">
+                <p style="margin:0 0 8px;font-weight:bold;">⚠️ LƯU Ý QUAN TRỌNG</p>
+                <p style="margin:0 0 8px;">Hóa đơn này là <b>hóa đơn tạm tính</b> chỉ bao gồm:</p>
+                <ul style="margin:8px 0;padding-left:20px;">
+                    <li>Chi phí phòng</li>
+                    <li>Các dịch vụ đã được xác nhận trước thanh toán</li>
+                </ul>
+                <p style="margin:8px 0;">Hóa đơn này <b>CHƯA bao gồm</b> các chi phí phát sinh trong quá trình ở như:</p>
+                <ul style="margin:8px 0;padding-left:20px;">
+                    <li>Dịch vụ minibar, đồ uống</li>
+                    <li>Dịch vụ giặt là, spa bổ sung</li>
+                    <li>Chi phí hư hỏng hoặc mất mát</li>
+                    <li>Các dịch vụ khác được thêm trong quá trình ở</li>
+                </ul>
+                <p style="margin:8px 0 0;">Hóa đơn cuối cùng sẽ được cập nhật và gửi lại sau khi bạn checkout.</p>
+            </div>
+
+            <p style="margin:16px 0 0;text-align:center;font-size:12px;color:#666;">
+                Cảm ơn bạn đã chọn Smart Hotel. Chúng tôi mong được phục vụ bạn!
+            </p>
+        </div>
+        '''
+
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[customer.email],
+        )
+        email.attach_alternative(html_body, 'text/html')
+        email.send(fail_silently=True)
+
+    @staticmethod
     def _send_invoice_email(invoice_id):
         PaymentService._register_pdf_fonts()
         invoice = Invoice.objects.select_related('booking', 'booking__customer').prefetch_related(
@@ -292,8 +499,14 @@ class PaymentService:
         pdf_url = invoice.pdf_url or PaymentService._store_invoice_pdf(invoice, pdf_bytes)
         pdf_filename = Path(pdf_url).name if pdf_url else f'invoice-{invoice.invoice_number}.pdf'
 
+        # Tính tiền phòng và tiền dịch vụ
+        room_total = Decimal('0')
+        service_total = Decimal('0')
+        
+        # Dòng chi tiết phòng
         line_rows = []
         for br in booking.booking_rooms.all():
+            room_total += br.subtotal
             line_rows.append(
                 f'<tr>'
                 f'<td style="padding:8px;border-bottom:1px solid #eee;">{br.room_type.name} - {br.room.room_number}</td>'
@@ -301,6 +514,19 @@ class PaymentService:
                 f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{br.subtotal:,.0f} đ</td>'
                 f'</tr>'
             )
+        
+        # Dòng chi tiết dịch vụ
+        from apps.services.models import ServiceOrderStatus
+        for order in booking.service_orders.filter(status=ServiceOrderStatus.CONFIRMED, is_active=True):
+            service_total += order.total_amount
+            for item in order.items.filter(is_active=True):
+                line_rows.append(
+                    f'<tr>'
+                    f'<td style="padding:8px;border-bottom:1px solid #eee;">{item.description or item.service.name}</td>'
+                    f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">1</td>'
+                    f'<td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{item.subtotal:,.0f} đ</td>'
+                    f'</tr>'
+                )
 
         subject = f'[Smart Hotel] Hóa đơn {invoice.invoice_number}'
         text_body = (
@@ -309,11 +535,21 @@ class PaymentService:
                         f'Smart Hotel | MST: {PaymentService.COMPANY_TAX_ID} | SĐT: {PaymentService.COMPANY_PHONE}\n'
                         f'Địa chỉ: {PaymentService.COMPANY_ADDRESS}\n\n'
             f'Số hóa đơn: {invoice.invoice_number}\n'
-            f'Tổng tạm tính: {invoice.subtotal:,.0f} đ\n'
+            f'Tạm tính (Phòng): {room_total:,.0f} đ\n'
+        )
+        if service_total > Decimal('0'):
+            text_body += f'Tiền dịch vụ: {service_total:,.0f} đ\n'
+        text_body += (
             f'Chiết khấu: {invoice.discount:,.0f} đ\n'
             f'Tổng cộng: {invoice.total:,.0f} đ\n\n'
             f'Trân trọng,\nSmart Hotel'
         )
+        
+        # HTML email body
+        service_fee_row = ''
+        if service_total > Decimal('0'):
+            service_fee_row = f'<p style="margin:0 0 4px"><b>Tiền dịch vụ:</b> {service_total:,.0f} đ</p>'
+        
         html_body = f'''
         <div style="font-family:Arial,sans-serif;color:#222;line-height:1.6">
                     <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
@@ -340,7 +576,7 @@ class PaymentService:
             <thead>
               <tr>
                 <th style="text-align:left;padding:8px;border-bottom:2px solid #ddd;">Mô tả</th>
-                <th style="text-align:center;padding:8px;border-bottom:2px solid #ddd;">Đêm</th>
+                <th style="text-align:center;padding:8px;border-bottom:2px solid #ddd;">Đêm/SL</th>
                 <th style="text-align:right;padding:8px;border-bottom:2px solid #ddd;">Thành tiền</th>
               </tr>
             </thead>
@@ -348,7 +584,8 @@ class PaymentService:
               {''.join(line_rows)}
             </tbody>
           </table>
-          <p style="margin:0 0 4px"><b>Tạm tính:</b> {invoice.subtotal:,.0f} đ</p>
+          <p style="margin:0 0 4px"><b>Tạm tính (Phòng):</b> {room_total:,.0f} đ</p>
+          {service_fee_row}
           <p style="margin:0 0 4px"><b>Chiết khấu:</b> {invoice.discount:,.0f} đ</p>
           <p style="margin:0 0 16px"><b>Tổng cộng:</b> {invoice.total:,.0f} đ</p>
         </div>
@@ -414,6 +651,8 @@ class PaymentService:
             except Exception:
                 pass
             invoice, created = PaymentService._ensure_invoice(booking)
+            PaymentService.sync_booking_payment(booking)
+            transaction.on_commit(lambda invoice_id=invoice.id: PaymentService._send_invoice_email(invoice_id))
         elif method == PaymentMethod.VNPAY:
             payment.save()
             payment.transaction_ref = VNPayService.txn_ref_from_payment_id(payment.id)
@@ -459,7 +698,8 @@ class PaymentService:
         except Exception:
             pass
         invoice, created = PaymentService._ensure_invoice(payment.booking)
-        transaction.on_commit(lambda invoice_id=invoice.id: PaymentService._send_invoice_email(invoice_id))
+        PaymentService.sync_booking_payment(payment.booking)
+        transaction.on_commit(lambda payment_id=payment.id: PaymentService._send_payment_confirmation_email(payment_id))
         return payment
 
     @staticmethod
@@ -535,6 +775,7 @@ class PaymentService:
         except Exception:
             pass
         invoice, created = PaymentService._ensure_invoice(payment.booking)
+        PaymentService.sync_booking_payment(booking)
         transaction.on_commit(lambda invoice_id=invoice.id: PaymentService._send_invoice_email(invoice_id))
         return payment
 
@@ -556,6 +797,7 @@ class PaymentService:
             amount=amount,
             note=reason or 'Refund',
         )
+        PaymentService.sync_booking_payment(payment.booking)
         return payment
 
     @staticmethod

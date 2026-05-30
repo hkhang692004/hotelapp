@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.constants import UserRole
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsManager, IsManagerOrReceptionist
 from apps.core.schema import PARAM_PAGE, PARAM_PAGE_SIZE, TAG_SERVICES
@@ -13,6 +14,7 @@ from apps.services.models import Service, ServiceCategory
 from apps.services.serializers import (
     ServiceCategorySerializer,
     ServiceOrderCreateSerializer,
+    ServiceCategoryWriteSerializer,
     ServiceOrderSerializer,
     ServiceSerializer,
     ServiceWriteSerializer,
@@ -22,14 +24,28 @@ from apps.services.services.order_service import ServiceOrderService
 
 @extend_schema_view(
     get=extend_schema(tags=[TAG_SERVICES], summary='Danh mục dịch vụ', responses={200: ServiceCategorySerializer(many=True)}),
+    post=extend_schema(
+        tags=[TAG_SERVICES],
+        summary='Tạo danh mục dịch vụ (Manager)',
+        request=ServiceCategoryWriteSerializer,
+        responses={201: ServiceCategorySerializer},
+    ),
 )
-class ServiceCategoryListView(APIView):
-    permission_classes = [IsAuthenticated]
+class ServiceCategoryListCreateView(APIView):
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [IsManager()]
+        return [IsAuthenticated()]
 
     def get(self, request):
-        qs = ServiceCategory.objects.filter(is_active=True)
+        qs = ServiceCategory.objects.filter(is_active=True).order_by('name')
         return Response(ServiceCategorySerializer(qs, many=True).data)
 
+    def post(self, request):
+        serializer = ServiceCategoryWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(ServiceCategorySerializer(instance).data, status=status.HTTP_201_CREATED)
 
 @extend_schema_view(
     get=extend_schema(
@@ -54,6 +70,12 @@ class ServiceListCreateView(APIView):
         category_id = request.query_params.get('category_id')
         if category_id:
             qs = qs.filter(category_id=category_id)
+        include_staff = request.query_params.get('include_staff_only', '').lower() in ('1', 'true', 'yes')
+        is_staff = request.user.is_superuser or request.user.role in (
+            UserRole.MANAGER, UserRole.RECEPTIONIST,
+        )
+        if not include_staff or not is_staff:
+            qs = qs.filter(is_staff_only=False)
         return Response(ServiceSerializer(qs, many=True).data)
 
     def post(self, request):
