@@ -340,13 +340,6 @@ const HousekeepingTasks = ({ navigation }) => {
     useFocusEffect(
         useCallback(() => {
             loadTasks();
-
-            // Tự động cập nhật mỗi 30 giây khi màn hình đang mở
-            const timer = setInterval(() => {
-                loadTasks({ silent: true });
-            }, 30_000);
-
-            return () => clearInterval(timer);
         }, [loadTasks])
     );
 

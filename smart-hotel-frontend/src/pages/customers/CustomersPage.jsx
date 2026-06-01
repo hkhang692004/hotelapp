@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { fetchCustomers, fetchCustomerBookings } from '../../api/customers'
+import { fetchCustomer, fetchCustomers, fetchCustomerBookings } from '../../api/customers'
 import { Header } from '../../components/layout/Header'
 import { Alert } from '../../components/ui/Alert'
 import { Button } from '../../components/ui/Button'
@@ -45,7 +45,11 @@ export function CustomersPage() {
   async function openCustomer(customer) {
     setSelected(customer)
     try {
-      const data = await fetchCustomerBookings(customer.id)
+      const [detail, data] = await Promise.all([
+        fetchCustomer(customer.id),
+        fetchCustomerBookings(customer.id),
+      ])
+      setSelected(detail)
       setBookings(Array.isArray(data) ? data : [])
     } catch {
       setBookings([])
@@ -81,6 +85,8 @@ export function CustomersPage() {
               <dl className="grid gap-3 text-sm md:grid-cols-2">
                 <div><span className="text-slate-500">Email: </span>{selected.email}</div>
                 <div><span className="text-slate-500">Phone: </span>{selected.phone || '—'}</div>
+                <div><span className="text-slate-500">CCCD/Passport: </span>{selected.guest_profile?.national_id || '—'}</div>
+                <div><span className="text-slate-500">Địa chỉ: </span>{selected.guest_profile?.address || '—'}</div>
               </dl>
             </Card>
             <div>

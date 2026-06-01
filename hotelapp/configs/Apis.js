@@ -3,6 +3,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getAuthDispatch, navigationReset } from "./NavigationService";
 
 export const BASE_URL = "http://10.0.2.2:8000/api/v1";
+const OAUTH_BASE_URL = "http://10.0.2.2:8000";
+const OAUTH_CLIENT_ID = process.env.EXPO_PUBLIC_OAUTH_CLIENT_ID;
+const OAUTH_CLIENT_SECRET = process.env.EXPO_PUBLIC_OAUTH_CLIENT_SECRET;
+
 export const endpoints = {
     // Auth
     login: "/auth/login/",
@@ -80,11 +84,16 @@ export const authApis = (token) => {
                     if (!refresh) throw new Error("no refresh token");
 
                     const refreshRes = await axios.post(
-                        `${BASE_URL}${endpoints.tokenRefresh}`,
-                        { refresh }
+                        `${OAUTH_BASE_URL}/o/token/`,
+                        new URLSearchParams({
+                            grant_type: "refresh_token",
+                            refresh_token: refresh,
+                            client_id: OAUTH_CLIENT_ID,
+                            client_secret: OAUTH_CLIENT_SECRET,
+                        }).toString(),
+                        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
                     );
-                    const newAccess =
-                        refreshRes.data?.data?.access || refreshRes.data?.access;
+                    const newAccess = refreshRes.data.access_token;
                     if (!newAccess) throw new Error("no new access token");
 
                     await AsyncStorage.setItem("access_token", newAccess);
@@ -118,3 +127,64 @@ export default axios.create({
         "Content-Type": "application/json",
     },
 });
+
+// Đăng nhập qua OAuth2 password grant, trả về {access, refresh, user}
+export const oauthLogin = async (email, password) => {
+    try {
+        const tokenRes = await axios.post(
+            `${OAUTH_BASE_URL}/o/token/`,
+            new URLSearchParams({
+                grant_type: "password",
+                username: email,
+                password,
+                client_id: OAUTH_CLIENT_ID,
+                client_secret: OAUTH_CLIENT_SECRET,
+                scope: "read write",
+            }).toString(),
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        );
+        const access = tokenRes.data.access_token;
+        const refresh = tokenRes.data.refresh_token;
+
+        // Lấy thông tin user
+        const meRes = await axios.get(`${BASE_URL}${endpoints.me}`, {
+            headers: { Authorization: `Bearer ${access}` },
+        });
+        const user = meRes.data?.data ?? meRes.data;
+        return { access, refresh, user };
+    } catch (err) {
+        // Chuyển đổi lỗi OAuth2 sang định dạng ứng dụng mong đợi
+        const oauthError = err?.response?.data;
+        if (oauthError?.error) {
+            const wrapped = new Error(oauthError.error_description || "Đăng nhập thất bại");
+            wrapped.response = {
+                data: {
+                    error: {
+                        message: oauthError.error_description || "Email hoặc mật khẩu không đúng",
+                        details: {},
+                    },
+                },
+            };
+            throw wrapped;
+        }
+        throw err;
+    }
+};
+
+// Thu hồi token khi đăng xuất
+export const oauthLogout = async (refreshToken) => {
+    if (!refreshToken) return;
+    try {
+        await axios.post(
+            `${OAUTH_BASE_URL}/o/revoke_token/`,
+            new URLSearchParams({
+                token: refreshToken,
+                client_id: OAUTH_CLIENT_ID,
+                client_secret: OAUTH_CLIENT_SECRET,
+            }).toString(),
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        );
+    } catch {
+        // Bỏ qua lỗi revoke
+    }
+};

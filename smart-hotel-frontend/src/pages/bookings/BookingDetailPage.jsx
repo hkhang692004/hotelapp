@@ -53,6 +53,9 @@ export function BookingDetailPage() {
   const [tab, setTab] = useState('overview')
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [paymentLoading, setPaymentLoading] = useState(false)
+  const [checkInOpen, setCheckInOpen] = useState(false)
+  const [checkInSubmitting, setCheckInSubmitting] = useState(false)
+  const [checkInForm, setCheckInForm] = useState({ national_id: '', address: '', note: '' })
   const [serviceOpen, setServiceOpen] = useState(false)
   const [services, setServices] = useState([])
   const [paymentForm, setPaymentForm] = useState({ amount: '', method: 'cash' })
@@ -92,16 +95,50 @@ export function BookingDetailPage() {
     load()
   }, [load])
 
+  useEffect(() => {
+    if (!checkInOpen || !booking) return
+    const profile = booking.customer_guest_profile || {}
+    setCheckInForm((prev) => ({
+      ...prev,
+      national_id: profile.national_id || prev.national_id,
+      address: profile.address || prev.address,
+      note: prev.note,
+    }))
+  }, [checkInOpen, booking])
+
   async function runAction(action) {
     setActionError('')
     try {
       if (action === 'confirm') await confirmBooking(id)
-      if (action === 'checkin') await checkInBooking(id)
       if (action === 'checkout') await checkOutBooking(id)
       if (action === 'cancel') await cancelBooking(id, 'Hủy từ web')
       await load()
     } catch (err) {
       setActionError(getErrorMessage(err))
+    }
+  }
+
+  async function handleCheckIn(e) {
+    e.preventDefault()
+    if (!checkInForm.national_id.trim() || !checkInForm.address.trim()) {
+      setActionError('Cần nhập CCCD/Passport và địa chỉ lưu trú')
+      return
+    }
+    setActionError('')
+    setCheckInSubmitting(true)
+    try {
+      await checkInBooking(id, {
+        note: checkInForm.note.trim(),
+        national_id: checkInForm.national_id.trim(),
+        address: checkInForm.address.trim(),
+      })
+      setCheckInOpen(false)
+      setCheckInForm({ national_id: '', address: '', note: '' })
+      await load()
+    } catch (err) {
+      setActionError(getErrorMessage(err))
+    } finally {
+      setCheckInSubmitting(false)
     }
   }
 
@@ -197,6 +234,7 @@ export function BookingDetailPage() {
     { key: 'services', label: 'Dịch vụ' },
     { key: 'history', label: 'Lịch sử' },
   ]
+  const lockedNationalId = Boolean(booking?.customer_guest_profile?.national_id)
 
   return (
     <>
@@ -226,7 +264,7 @@ export function BookingDetailPage() {
               </Button>
             )}
             {booking.status === 'confirmed' && (
-              <Button onClick={() => runAction('checkin')}>
+              <Button onClick={() => setCheckInOpen(true)}>
                 <LogIn style={{ width: '14px', height: '14px' }} />
                 Check-in
               </Button>
@@ -401,6 +439,45 @@ export function BookingDetailPage() {
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="secondary" onClick={() => setPaymentOpen(false)} disabled={paymentLoading}>Hủy</Button>
             <Button type="submit" disabled={paymentLoading}>{paymentLoading ? 'Đang xử lý...' : 'Xác nhận thanh toán'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={checkInOpen} onClose={() => setCheckInOpen(false)} title="Check-in và cập nhật hồ sơ lưu trú">
+        <form className="space-y-4" onSubmit={handleCheckIn}>
+          <Input
+            label="CCCD / Passport"
+            value={checkInForm.national_id}
+            onChange={(e) => setCheckInForm({ ...checkInForm, national_id: e.target.value })}
+            required
+            disabled={checkInSubmitting || lockedNationalId}
+          />
+          {lockedNationalId ? <p className="text-xs text-slate-500">CCCD đã liên kết với tài khoản này nên không thể chỉnh sửa.</p> : null}
+          <Input
+            label="Địa chỉ"
+            value={checkInForm.address}
+            onChange={(e) => setCheckInForm({ ...checkInForm, address: e.target.value })}
+            required
+            disabled={checkInSubmitting}
+          />
+          <Input
+            label="Ghi chú (không bắt buộc)"
+            value={checkInForm.note}
+            onChange={(e) => setCheckInForm({ ...checkInForm, note: e.target.value })}
+            disabled={checkInSubmitting}
+          />
+          <div className="flex justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setCheckInOpen(false)}
+              disabled={checkInSubmitting}
+            >
+              Hủy
+            </Button>
+            <Button type="submit" disabled={checkInSubmitting}>
+              {checkInSubmitting ? 'Đang check-in...' : 'Xác nhận check-in'}
+            </Button>
           </div>
         </form>
       </Modal>

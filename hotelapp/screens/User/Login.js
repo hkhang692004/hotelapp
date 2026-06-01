@@ -12,7 +12,7 @@ import {
     Image,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Apis, { endpoints } from "../../configs/Apis";
+import { oauthLogin } from "../../configs/Apis";
 import { MyUserContext } from "../../configs/Contexts";
 import PasswordInput from "../../components/PasswordInput";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -69,8 +69,7 @@ const Login = ({ navigation }) => {
 
         setLoading(true);
         try {
-            const res = await Apis.post(endpoints.login, { email, password });
-            const { access, refresh, user } = res.data.data;
+            const { access, refresh, user } = await oauthLogin(email, password);
 
             // Kiểm tra role được phép vào app
             if (user.role !== "customer" && user.role !== "housekeeping") {

@@ -43,8 +43,8 @@ const AppTheme = {
 // Bottom Tab dành cho Customer / Staff
 const MainTabNavigator = () => {
   const [user] = useContext(MyUserContext);
-  const [notifUnread] = useContext(NotifUnreadContext);
-  const [, setNotifUnread] = useContext(NotifUnreadContext);
+  const [notifUnread, setNotifUnread] = useContext(NotifUnreadContext);
+
 
   useEffect(() => {
     if (!user?.token) {

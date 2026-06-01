@@ -31,9 +31,18 @@ api.interceptors.response.use(
     }
     if (!refreshPromise) {
       refreshPromise = axios
-        .post(`${API_URL}/auth/token/refresh/`, { refresh })
+        .post(
+          '/o/token/',
+          new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: refresh,
+            client_id: import.meta.env.VITE_OAUTH_CLIENT_ID,
+            client_secret: import.meta.env.VITE_OAUTH_CLIENT_SECRET,
+          }).toString(),
+          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        )
         .then((res) => {
-          const access = res.data?.data?.access || res.data?.access
+          const access = res.data.access_token
           localStorage.setItem('access_token', access)
           return access
         })

@@ -5,7 +5,6 @@ import { Alert } from '../../components/ui/Alert'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
-import { Select } from '../../components/ui/Select'
 import { Spinner } from '../../components/ui/Spinner'
 import { Textarea } from '../../components/ui/Textarea'
 import { getErrorMessage } from '../../hooks/useAsync'
@@ -26,7 +25,6 @@ const initialForm = () => ({
   children: 0,
   room_ids: [],
   special_request: '',
-  status: 'confirmed',
 })
 
 export function WalkInModal({ open, onClose, onSuccess }) {
@@ -90,7 +88,6 @@ export function WalkInModal({ open, onClose, onSuccess }) {
         children: form.children,
         room_ids: form.room_ids,
         special_request: form.special_request,
-        status: form.status,
       })
       onSuccess(booking)
     } catch (err) {
@@ -174,15 +171,6 @@ export function WalkInModal({ open, onClose, onSuccess }) {
               onChange={(e) => setForm({ ...form, children: Number(e.target.value) })}
             />
           </div>
-
-          <Select
-            label="Trạng thái ban đầu"
-            value={form.status}
-            onChange={(e) => setForm({ ...form, status: e.target.value })}
-          >
-            <option value="confirmed">Đã xác nhận</option>
-            <option value="pending">Chờ xác nhận</option>
-          </Select>
 
           <div>
             <p className="mb-2 text-sm font-medium text-slate-700">Chọn phòng trống</p>

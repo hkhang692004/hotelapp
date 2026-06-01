@@ -29,8 +29,8 @@ export async function cancelBooking(id, reason = '') {
   return unwrap(response)
 }
 
-export async function checkInBooking(id, note = '') {
-  const response = await api.post(`/bookings/${id}/check-in/`, { note })
+export async function checkInBooking(id, payload = {}) {
+  const response = await api.post(`/bookings/${id}/check-in/`, payload)
   return unwrap(response)
 }
 
