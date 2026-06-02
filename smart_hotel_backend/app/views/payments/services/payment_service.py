@@ -57,15 +57,81 @@ class PaymentService:
     def _register_pdf_fonts():
         if PaymentService._fonts_registered:
             return
-        pdfmetrics.registerFont(TTFont('SmartHotel', r'C:\\Windows\\Fonts\\arial.ttf'))
-        pdfmetrics.registerFont(TTFont('SmartHotel-Bold', r'C:\\Windows\\Fonts\\arialbd.ttf'))
-        pdfmetrics.registerFontFamily(
-            'SmartHotel',
-            normal='SmartHotel',
-            bold='SmartHotel-Bold',
-            italic='SmartHotel',
-            boldItalic='SmartHotel-Bold',
-        )
+        
+        # Try to register fonts from common system locations
+        font_paths = {
+            'normal': None,
+            'bold': None,
+        }
+        
+        # Define paths to check based on OS
+        import platform
+        import os
+        
+        if platform.system() == 'Windows':
+            possible_paths = {
+                'normal': [
+                    r'C:\Windows\Fonts\arial.ttf',
+                    r'C:\Windows\Fonts\times.ttf',
+                ],
+                'bold': [
+                    r'C:\Windows\Fonts\arialbd.ttf',
+                    r'C:\Windows\Fonts\timesbd.ttf',
+                ],
+            }
+        elif platform.system() == 'Darwin':  # macOS
+            possible_paths = {
+                'normal': [
+                    '/Library/Fonts/Arial.ttf',
+                    '/System/Library/Fonts/Helvetica.ttc',
+                ],
+                'bold': [
+                    '/Library/Fonts/Arial Bold.ttf',
+                    '/System/Library/Fonts/Helvetica.ttc',
+                ],
+            }
+        else:  # Linux and others
+            possible_paths = {
+                'normal': [
+                    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+                ],
+                'bold': [
+                    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+                    '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+                ],
+            }
+        
+        # Find available fonts
+        for style, paths in possible_paths.items():
+            for path in paths:
+                if os.path.exists(path):
+                    font_paths[style] = path
+                    break
+        
+        try:
+            # Register fonts if found
+            if font_paths['normal']:
+                pdfmetrics.registerFont(TTFont('SmartHotel', font_paths['normal']))
+            if font_paths['bold']:
+                pdfmetrics.registerFont(TTFont('SmartHotel-Bold', font_paths['bold']))
+            
+            # Use registered fonts if available, otherwise fall back to default
+            normal_font = 'SmartHotel' if font_paths['normal'] else 'Helvetica'
+            bold_font = 'SmartHotel-Bold' if font_paths['bold'] else 'Helvetica-Bold'
+            
+            if font_paths['normal'] or font_paths['bold']:
+                pdfmetrics.registerFontFamily(
+                    'SmartHotel',
+                    normal=normal_font,
+                    bold=bold_font,
+                    italic=normal_font,
+                    boldItalic=bold_font,
+                )
+        except Exception as e:
+            # Silently fail - will use default fonts
+            pass
+        
         PaymentService._fonts_registered = True
 
     @staticmethod

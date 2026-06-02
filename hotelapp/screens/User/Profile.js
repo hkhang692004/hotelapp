@@ -19,7 +19,7 @@ import { useNavigation } from "@react-navigation/native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { MyUserContext } from "../../configs/Contexts";
-import { authApis, endpoints } from "../../configs/Apis";
+import { authApis, endpoints, oauthLogout } from "../../configs/Apis";
 
 const ROLE_LABEL = {
     customer:     "Khách hàng",
@@ -110,10 +110,18 @@ export default function Profile() {
                 text: "Đăng xuất",
                 style: "destructive",
                 onPress: async () => {
-                    await AsyncStorage.removeItem("access_token");
-                    await AsyncStorage.removeItem("refresh_token");
-                    dispatch({ type: "LOGOUT" });
-                    navigation.replace("login");
+                    try {
+                        if (user?.refresh_token) {
+                            await oauthLogout(user.refresh_token);
+                        }
+                    } catch (err) {
+                        console.log("Revoke token failed (ignored):", err);
+                    } finally {
+                        await AsyncStorage.removeItem("access_token");
+                        await AsyncStorage.removeItem("refresh_token");
+                        dispatch({ type: "LOGOUT" });
+                        navigation.replace("login");
+                    }
                 },
             },
         ]);

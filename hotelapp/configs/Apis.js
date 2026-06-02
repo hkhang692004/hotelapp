@@ -2,8 +2,13 @@ import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getAuthDispatch, navigationReset } from "./NavigationService";
 
-export const BASE_URL = "http://10.0.2.2:8000/api/v1";
-const OAUTH_BASE_URL = "http://10.0.2.2:8000";
+const DEFAULT_OAUTH_BASE_URL = "http://10.0.2.2:8000";
+const envApiUrl = process.env.EXPO_PUBLIC_API_URL;
+const envOAuthBaseUrl = process.env.EXPO_PUBLIC_OAUTH_BASE_URL;
+
+const normalizedOAuthBaseUrl = (envOAuthBaseUrl || DEFAULT_OAUTH_BASE_URL).replace(/\/+$/, "");
+export const BASE_URL = (envApiUrl || `${normalizedOAuthBaseUrl}/api/v1`).replace(/\/+$/, "");
+const OAUTH_BASE_URL = normalizedOAuthBaseUrl;
 const OAUTH_CLIENT_ID = process.env.EXPO_PUBLIC_OAUTH_CLIENT_ID;
 const OAUTH_CLIENT_SECRET = process.env.EXPO_PUBLIC_OAUTH_CLIENT_SECRET;
 
