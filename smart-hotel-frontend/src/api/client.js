@@ -2,6 +2,29 @@ import axios from 'axios'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api/v1'
 
+function resolveOAuthBaseUrl() {
+  const envBase = import.meta.env.VITE_OAUTH_BASE_URL
+  if (envBase) return envBase
+
+  if (/^https?:\/\//i.test(API_URL)) {
+    try {
+      return new URL(API_URL).origin
+    } catch {
+      return ''
+    }
+  }
+
+  return ''
+}
+
+const OAUTH_BASE_URL = resolveOAuthBaseUrl()
+
+export function buildOAuthUrl(path) {
+  if (!OAUTH_BASE_URL) return path
+  const normalizedBase = OAUTH_BASE_URL.replace(/\/+$/, '')
+  return new URL(path, `${normalizedBase}/`).toString()
+}
+
 export const api = axios.create({
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
@@ -32,7 +55,7 @@ api.interceptors.response.use(
     if (!refreshPromise) {
       refreshPromise = axios
         .post(
-          '/o/token/',
+          buildOAuthUrl('/o/token/'),
           new URLSearchParams({
             grant_type: 'refresh_token',
             refresh_token: refresh,

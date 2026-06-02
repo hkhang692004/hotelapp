@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { api, unwrap } from './client'
+import { api, unwrap, buildOAuthUrl } from './client'
 
 const CLIENT_ID = import.meta.env.VITE_OAUTH_CLIENT_ID
 const CLIENT_SECRET = import.meta.env.VITE_OAUTH_CLIENT_SECRET
@@ -16,7 +16,7 @@ export async function login(email, password) {
   let access, refresh
   try {
     const res = await axios.post(
-      '/o/token/',
+      buildOAuthUrl('/o/token/'),
       buildOAuthParams({ grant_type: 'password', username: email, password, scope: 'read write' }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     )
@@ -43,7 +43,7 @@ export async function logout(refresh) {
   if (!refresh) return
   try {
     await axios.post(
-      '/o/revoke_token/',
+      buildOAuthUrl('/o/revoke_token/'),
       buildOAuthParams({ token: refresh }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     )
